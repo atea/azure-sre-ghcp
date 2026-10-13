@@ -1,0 +1,63 @@
+[project]
+name = "azure-sre"
+version = "0.1.0"
+description = "Azure SRE Copilot: alert-driven, read-only Azure Container Apps investigation with GitHub issue publication"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "aiohttp>=3.11,<4",
+    "azure-data-tables>=12.6,<13",
+    "azure-identity>=1.20,<2",
+    "azure-keyvault-secrets>=4.9,<5",
+    "azure-servicebus>=7.13,<8",
+    "azure-storage-blob>=12.24,<13",
+    "fastapi>=0.115,<1",
+    "github-copilot-sdk==1.0.20",
+    "httpx>=0.28,<1",
+    "mcp==2.3.0",
+    "pydantic==2.14.1",
+    "pyjwt[crypto]>=2.10,<3",
+    "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/azure_sre"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+    "offline_runtime: runs the pinned Copilot runtime locally without credentials",
+    "live: requires external tenant/GitHub App/Azure prerequisites; opt-in via SRE_LIVE_GATES=1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+extend-exclude = [".work"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "BLE", "ASYNC", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "src"
+packages = ["azure_sre"]

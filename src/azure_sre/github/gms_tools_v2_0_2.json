@@ -1,0 +1,290 @@
+{
+ "next_cursor": null,
+ "server": {
+  "name": "github-mcp-server",
+  "version": "2.0.2"
+ },
+ "tools": [
+  {
+   "input_schema": {
+    "properties": {
+     "body": {
+      "minLength": 1,
+      "type": "string"
+     },
+     "comment_id": {
+      "minimum": 1,
+      "type": "integer"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "reaction": {
+      "enum": [
+       "+1",
+       "-1",
+       "laugh",
+       "confused",
+       "heart",
+       "hooray",
+       "rocket",
+       "eyes"
+      ],
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo",
+     "issue_number"
+    ],
+    "type": "object"
+   },
+   "name": "add_issue_comment",
+   "output_schema": null
+  },
+  {
+   "input_schema": {
+    "properties": {
+     "issue_number": {
+      "type": "number"
+     },
+     "method": {
+      "enum": [
+       "get",
+       "get_comments",
+       "get_sub_issues",
+       "get_parent",
+       "get_labels"
+      ],
+      "type": "string"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "page": {
+      "minimum": 1,
+      "type": "number"
+     },
+     "perPage": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "number"
+     },
+     "repo": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "method",
+     "owner",
+     "repo",
+     "issue_number"
+    ],
+    "type": "object"
+   },
+   "name": "issue_read",
+   "output_schema": null
+  },
+  {
+   "input_schema": {
+    "properties": {
+     "assignees": {
+      "type": "array"
+     },
+     "body": {
+      "type": "string"
+     },
+     "duplicate_of": {
+      "type": "number"
+     },
+     "issue_fields": {
+      "type": "array"
+     },
+     "issue_number": {
+      "type": "number"
+     },
+     "labels": {
+      "type": "array"
+     },
+     "method": {
+      "enum": [
+       "create",
+       "update"
+      ],
+      "type": "string"
+     },
+     "milestone": {
+      "type": "number"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "parent_issue_number": {
+      "minimum": 1,
+      "type": "number"
+     },
+     "parent_owner": {
+      "type": "string"
+     },
+     "parent_repo": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "state": {
+      "enum": [
+       "open",
+       "closed"
+      ],
+      "type": "string"
+     },
+     "state_reason": {
+      "enum": [
+       "completed",
+       "not_planned",
+       "duplicate"
+      ],
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "type": {}
+    },
+    "required": [
+     "method",
+     "owner",
+     "repo"
+    ],
+    "type": "object"
+   },
+   "name": "issue_write",
+   "output_schema": null
+  },
+  {
+   "input_schema": {
+    "properties": {
+     "after": {
+      "type": "string"
+     },
+     "direction": {
+      "enum": [
+       "ASC",
+       "DESC"
+      ],
+      "type": "string"
+     },
+     "field_filters": {
+      "type": "array"
+     },
+     "fields": {
+      "type": "array"
+     },
+     "labels": {
+      "type": "array"
+     },
+     "orderBy": {
+      "enum": [
+       "CREATED_AT",
+       "UPDATED_AT",
+       "COMMENTS"
+      ],
+      "type": "string"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "perPage": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "number"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "since": {
+      "type": "string"
+     },
+     "state": {
+      "enum": [
+       "OPEN",
+       "CLOSED"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "owner",
+     "repo"
+    ],
+    "type": "object"
+   },
+   "name": "list_issues",
+   "output_schema": null
+  },
+  {
+   "input_schema": {
+    "properties": {
+     "fields": {
+      "type": "array"
+     },
+     "order": {
+      "enum": [
+       "asc",
+       "desc"
+      ],
+      "type": "string"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "page": {
+      "minimum": 1,
+      "type": "number"
+     },
+     "perPage": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "number"
+     },
+     "query": {
+      "type": "string"
+     },
+     "repo": {
+      "type": "string"
+     },
+     "sort": {
+      "enum": [
+       "comments",
+       "reactions",
+       "reactions-+1",
+       "reactions--1",
+       "reactions-smile",
+       "reactions-thinking_face",
+       "reactions-heart",
+       "reactions-tada",
+       "interactions",
+       "created",
+       "updated"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ],
+    "type": "object"
+   },
+   "name": "search_issues",
+   "output_schema": null
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+# Keep the build context small and free of secrets, local state, and tests.
+.git
+.github
+.venv
+.work
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+*.pem
+*.key
+**/*.pem
+**/*.key
+tests
+docs
+infra
+scripts/*.sh.bak
+Dockerfile
+.dockerignore

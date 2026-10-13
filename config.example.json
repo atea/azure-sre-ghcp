@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "deployed_version": "0.1.0",
+  "budget": {
+    "investigation_seconds": 300,
+    "cli_call_seconds": 30,
+    "diagnostic_calls": 12,
+    "concurrency_per_replica": 2,
+    "rows_per_query": 100,
+    "evidence_bytes": 65536,
+    "issue_body_bytes": 24576,
+    "window_before_minutes": 15,
+    "window_after_minutes": 5,
+    "max_targets": 8,
+    "max_metric_names": 5
+  },
+  "registry": {
+    "schema_version": 1,
+    "tenant_id": "00000000-0000-0000-0000-000000000000",
+    "applications": [
+      {
+        "app_id": "shop-api",
+        "environment": "prod",
+        "subscription_id": "00000000-0000-0000-0000-000000000000",
+        "container_app_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/REPLACE-RG/providers/Microsoft.App/containerApps/REPLACE-APP",
+        "app_insights_component_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/REPLACE-RG/providers/Microsoft.Insights/components/REPLACE-APPI",
+        "log_analytics_workspace_id": "00000000-0000-0000-0000-000000000000",
+        "log_analytics_workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/REPLACE-RG/providers/Microsoft.OperationalInsights/workspaces/REPLACE-LAW",
+        "repository": "REPLACE-ORG/REPLACE-REPO",
+        "installation_id": 1
+      }
+    ]
+  },
+  "webhook_callers": [
+    {
+      "object_id": "00000000-0000-0000-0000-000000000000",
+      "sink": "production"
+    }
+  ],
+  "publisher": {
+    "key_vault_uri": "https://REPLACE-VAULT.vault.azure.net/",
+    "secret_name": "REPLACE-github-app-key"
+  }
+}

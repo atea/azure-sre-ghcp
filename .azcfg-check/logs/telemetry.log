@@ -1,0 +1,2 @@
+61525 : 2026-10-13 09:20:29,269 : INFO : telemetry.main : Attempt start. Configuration directory [./.azcfg-check]. Cache directory [./.azcfg-check/telemetry/20261013092029148].
+61525 : 2026-10-13 09:20:29,276 : INFO : telemetry.client : Accumulated 0 events. Flush the clients.

@@ -1,0 +1,101 @@
+name: Infrastructure deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Existing ACR image digest (registry.azurecr.io/azure-sre-copilot@sha256:...)
+        required: true
+        type: string
+      apply:
+        description: Apply after validation and what-if (false previews only)
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azure-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  infrastructure:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CORE_ONLY_SHOW_ERRORS: "true"
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      PARAMETER_FILE: infra/environments/dev.bicepparam
+      IMAGE: ${{ inputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check deployment settings
+        env:
+          CLIENT_ID: ${{ vars.AZURE_INFRA_CLIENT_ID }}
+          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          for setting in CLIENT_ID TENANT_ID SUBSCRIPTION_ID RESOURCE_GROUP; do
+            value="$(printenv "$setting")"
+            if [[ -z "$value" ]]; then
+              echo "::error::Missing environment variable $setting"
+              exit 1
+            fi
+          done
+          if [[ ! "$IMAGE" =~ ^[a-zA-Z0-9.-]+/[a-z0-9/._-]+@sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::image must be a fully qualified ACR digest reference"
+            exit 1
+          fi
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ vars.AZURE_INFRA_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Compile reviewed parameters
+        run: |
+          az bicep install --version v0.46.1
+          az bicep lint --file infra/main.bicep
+          az bicep build --file infra/main.bicep --outfile "$RUNNER_TEMP/main.json"
+          az bicep build-params --file "$PARAMETER_FILE" --outfile "$RUNNER_TEMP/parameters.json"
+          jq --arg image "$IMAGE" '.parameters.image.value = $image' \
+            "$RUNNER_TEMP/parameters.json" > "$RUNNER_TEMP/deployment-parameters.json"
+          if jq -e '.parameters | [.. | strings] |
+            any(test("<[^>]+>") or . == "00000000-0000-0000-0000-000000000000")' \
+            "$RUNNER_TEMP/deployment-parameters.json" > /dev/null; then
+            echo "::error::Replace placeholders in $PARAMETER_FILE before deploying"
+            exit 1
+          fi
+          acr_name="$(jq -r '.parameters.acrName.value' "$RUNNER_TEMP/deployment-parameters.json")"
+          login_server="$(az acr show --name "$acr_name" --resource-group "$RESOURCE_GROUP" \
+            --query loginServer --output tsv)"
+          if [[ "$IMAGE" != "$login_server/"* ]]; then
+            echo "::error::image must come from the ACR configured in $PARAMETER_FILE"
+            exit 1
+          fi
+      - name: Validate against Azure
+        run: |
+          az deployment group validate --resource-group "$RESOURCE_GROUP" \
+            --template-file "$RUNNER_TEMP/main.json" \
+            --parameters "$RUNNER_TEMP/deployment-parameters.json" --output none
+      - name: Preview infrastructure changes
+        run: |
+          az deployment group what-if --resource-group "$RESOURCE_GROUP" \
+            --template-file "$RUNNER_TEMP/main.json" \
+            --parameters "$RUNNER_TEMP/deployment-parameters.json"
+      - name: Apply infrastructure
+        if: inputs.apply
+        run: |
+          az deployment group create --resource-group "$RESOURCE_GROUP" \
+            --name "infra-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --template-file "$RUNNER_TEMP/main.json" \
+            --parameters "$RUNNER_TEMP/deployment-parameters.json" --output none
+          echo "Infrastructure deployed with image \`$IMAGE\`." >> "$GITHUB_STEP_SUMMARY"

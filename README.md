@@ -25,7 +25,10 @@ fixed private Azure Blob JSON file accessed with explicit managed identity.
 Never put PEM keys or tokens into configuration.
 
 Deployment templates and image build instructions are in
-[deployment](docs/deployment.md). The receiver, worker and application entrypoint
+[deployment](docs/deployment.md), including GitHub Actions CI, manual infrastructure
+deployment and application build/deploy to Azure using OIDC. Configure the `dev`
+GitHub environment and Azure prerequisites there before enabling deployment.
+The receiver, worker and application entrypoint
 are wired (`python -m azure_sre receiver|worker`); building the image alone does not
 prove live service readiness. See [implementation status](docs/implementation-status.md)
 for required role settings.

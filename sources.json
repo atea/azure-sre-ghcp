@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "deployed_version": "0.1.0",
+  "budget": {
+    "investigation_seconds": 300,
+    "cli_call_seconds": 30,
+    "diagnostic_calls": 12,
+    "concurrency_per_replica": 2,
+    "rows_per_query": 100,
+    "evidence_bytes": 65536,
+    "issue_body_bytes": 24576,
+    "window_before_minutes": 15,
+    "window_after_minutes": 5,
+    "max_targets": 8,
+    "max_metric_names": 5
+  },
+  "registry": {
+    "schema_version": 1,
+    "tenant_id": "0d8b78b5-9694-4960-bafb-73cdca11dfde",
+    "applications": [
+      {
+        "app_id": "demoapp1",
+        "environment": "dev",
+        "subscription_id": "48e5e4b1-caf9-478e-a846-0c8dd74bcd15",
+        "container_app_id": "/subscriptions/48e5e4b1-caf9-478e-a846-0c8dd74bcd15/resourceGroups/d-sdc-rg-ghcpsre/providers/Microsoft.App/containerApps/ca-demoapp1-v2ho77",
+        "log_analytics_workspace_id": "709fc2c0-f48b-4114-b4e5-6ce31d4955a2",
+        "app_insights_component_id": "/subscriptions/48e5e4b1-caf9-478e-a846-0c8dd74bcd15/resourceGroups/d-sdc-rg-ghcpsre/providers/Microsoft.Insights/components/appi-sredev",
+        "log_analytics_workspace_resource_id": "/subscriptions/48e5e4b1-caf9-478e-a846-0c8dd74bcd15/resourcegroups/d-sdc-rg-ghcpsre/providers/microsoft.operationalinsights/workspaces/log-demoapp1-v2ho77",
+        "repository": "atea/azure-container-app-demo",
+        "installation_id": 1
+      }
+    ]
+  },
+  "webhook_callers": [
+    {
+      "object_id": "2ff0ab60-d6b6-49b7-9c91-095a6cf2775f",
+      "sink": "production"
+    }
+  ],
+  "publisher": {
+    "key_vault_uri": "https://ghcpsrekv.vault.azure.net/",
+    "secret_name": "githubpublisherappid"
+  }
+}

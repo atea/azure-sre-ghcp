@@ -1,0 +1,153 @@
+name: Application build and deployment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/**
+      - scripts/**
+      - tests/**
+      - Dockerfile
+      - .dockerignore
+      - pyproject.toml
+      - uv.lock
+      - .python-version
+      - .github/workflows/ci.yml
+      - .github/workflows/cd.yml
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy after building (false publishes a bootstrap image only)
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azure-deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CORE_ONLY_SHOW_ERRORS: "true"
+      RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      RECEIVER_APP: ${{ vars.AZURE_RECEIVER_APP_NAME }}
+      WORKER_APP: ${{ vars.AZURE_WORKER_APP_NAME }}
+      DEPLOY: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check deployment settings
+        env:
+          CLIENT_ID: ${{ secrets.AZURE_APP_CLIENT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          for setting in CLIENT_ID TENANT_ID SUBSCRIPTION_ID RESOURCE_GROUP ACR_NAME RECEIVER_APP WORKER_APP; do
+            value="$(printenv "$setting")"
+            if [[ -z "$value" ]]; then
+              echo "::error::Missing environment variable $setting"
+              exit 1
+            fi
+          done
+          if [[ "$RECEIVER_APP" == "$WORKER_APP" ]]; then
+            echo "::error::Receiver and worker must be different Container Apps"
+            exit 1
+          fi
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Verify infrastructure and sign in to ACR
+        id: registry
+        run: |
+          az extension add --name containerapp --upgrade --yes
+          if [[ "$DEPLOY" == true ]]; then
+            for app in "$RECEIVER_APP" "$WORKER_APP"; do
+              az containerapp show --resource-group "$RESOURCE_GROUP" --name "$app" --output none
+            done
+          fi
+          login_server="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          test -n "$login_server"
+          echo "server=$login_server" >> "$GITHUB_OUTPUT"
+          az acr login --name "$ACR_NAME"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build and push shared image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.registry.outputs.server }}/azure-sre-copilot:${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify offline gates in the built image
+        env:
+          IMAGE: ${{ steps.registry.outputs.server }}/azure-sre-copilot@${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --entrypoint python "$IMAGE" -m azure_sre.runtime.smoke offline
+          docker run --rm --entrypoint python "$IMAGE" -m azure_sre.runtime.smoke mcp-tools \
+            --binary /opt/gms/github-mcp-server
+          echo "Published shared image \`$IMAGE\`." >> "$GITHUB_STEP_SUMMARY"
+      - name: Deploy image to receiver and worker
+        if: env.DEPLOY == 'true'
+        env:
+          IMAGE: ${{ steps.registry.outputs.server }}/azure-sre-copilot@${{ steps.build.outputs.digest }}
+        run: |
+          for app in "$RECEIVER_APP" "$WORKER_APP"; do
+            revision="$(az containerapp update --resource-group "$RESOURCE_GROUP" \
+              --name "$app" --image "$IMAGE" --query properties.latestRevisionName --output tsv)"
+            test -n "$revision"
+            ready=false
+            for attempt in $(seq 1 60); do
+              state="$(az containerapp revision show --resource-group "$RESOURCE_GROUP" \
+                --name "$app" --revision "$revision" --output json)"
+              if jq -e '.properties.provisioningState == "Provisioned" and
+                .properties.healthState == "Healthy" and .properties.runningState == "Running"' \
+                <<< "$state" > /dev/null; then
+                ready=true
+                break
+              fi
+              if jq -e '.properties.provisioningState == "Failed" or
+                .properties.runningState == "Failed" or .properties.runningState == "Degraded"' \
+                <<< "$state" > /dev/null; then
+                echo "::error::$app revision $revision failed"
+                echo "$state"
+                exit 1
+              fi
+              sleep 10
+            done
+            if [[ "$ready" != true ]]; then
+              echo "::error::Timed out waiting for $app revision $revision"
+              echo "$state"
+              exit 1
+            fi
+            echo "Deployed **$app**, revision \`$revision\`, image \`$IMAGE\`." >> "$GITHUB_STEP_SUMMARY"
+          done
+      - name: Check receiver readiness over HTTPS
+        if: env.DEPLOY == 'true'
+        run: |
+          fqdn="$(az containerapp show --resource-group "$RESOURCE_GROUP" \
+            --name "$RECEIVER_APP" --query properties.configuration.ingress.fqdn --output tsv)"
+          test -n "$fqdn"
+          curl --fail --silent --show-error --retry 6 --retry-all-errors \
+            --retry-delay 10 --connect-timeout 10 --max-time 30 "https://$fqdn/readyz"

@@ -95,12 +95,96 @@ Diagnostic workspace and named Container Apps must be explicitly approved.
 Publisher PEM reference belongs in the reviewed `sources.json`; secret values never
 belong in Bicep parameters.
 
+## GitHub Actions
+
+Three workflows are provided:
+
+| Workflow | Trigger | Behavior |
+|---|---|---|
+| `ci.yml` — Application CI | Pull requests, pushes to `main`, manual, reusable by CD | Frozen Python 3.13 dependencies, Ruff, mypy, unit/integration/acceptance tests excluding live gates, mandatory pinned runtime/MCP smoke gates, offline Bicep lint/build and parameter compilation. No Azure credentials. |
+| `infra-deploy.yml` — Infrastructure deployment | Manual, on `main` only | Compiles `infra/environments/dev.bicepparam`, rejects placeholders, overrides the image with a required digest, validates against Azure and runs what-if. `apply=false` is preview-only; `apply=true` then applies the same parameters. |
+| `cd.yml` — Application build and deployment | Application/build/test/workflow changes on `main`, or manual on `main` | Requires reusable CI, builds/pushes one `linux/amd64` image to ACR, runs offline gates inside the image, and updates receiver and worker to the same immutable digest. Waits for healthy running revisions and checks receiver `/readyz` over HTTPS. Manual `deploy=false` publishes a bootstrap image without updating apps. |
+
+The deployment workflows use the **`dev` GitHub environment** and a shared
+non-cancelling concurrency group so infrastructure and application rollouts do
+not overlap. GitHub concurrency is not a FIFO queue: a newer pending run can
+replace an older pending run. CD updates images only; infrastructure and RBAC
+remain owned by Bicep. Infrastructure applies also set both app images, so use
+the currently deployed digest for routine infrastructure changes to avoid
+rolling back the application.
+
+### GitHub environment and Azure permissions
+
+Create the `dev` environment, restrict deployment branches to `main`, and
+configure required reviewers as appropriate. Set these **environment variables**
+(not application secrets):
+
+| Variable | Value |
+|---|---|
+| `AZURE_TENANT_ID` | Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+| `AZURE_INFRA_CLIENT_ID` | Client ID of the infrastructure deployment identity |
+| `AZURE_APP_CLIENT_ID` | Client ID of the application build/deploy identity |
+| `AZURE_RESOURCE_GROUP` | Existing target resource group |
+| `AZURE_ACR_NAME` | Existing ACR name, matching `acrName` in the Bicep parameters |
+| `AZURE_RECEIVER_APP_NAME` | `ca-<namePrefix>-recv` (for the sample prefix: `ca-sredev-recv`) |
+| `AZURE_WORKER_APP_NAME` | `ca-<namePrefix>-wrk` (for the sample prefix: `ca-sredev-wrk`) |
+
+Give each deployment identity a GitHub OIDC federated credential with issuer
+`https://token.actions.githubusercontent.com`, audience
+`api://AzureADTokenExchange`, and subject
+`repo:atea/azure-sre-ghcp:environment:dev`. Both jobs request `id-token: write`;
+no Azure client secret, publish profile, ACR password or runtime application
+secret is stored in GitHub. Keep the deployment identities separate from the
+receiver and worker runtime managed identities.
+
+- Infrastructure identity: `Contributor` on the target resource group plus
+  `Role Based Access Control Administrator` scoped to that group (or a suitably
+  constrained custom role) to create the template's role assignments. Contributor
+  alone cannot assign RBAC. Review/limit the role-assignment authority before
+  production.
+- Application identity: `AcrPush` on the existing registry and
+  `Container Apps Contributor` on each of the two apps. Grant these app-scoped
+  roles after the first infrastructure deployment. For an ABAC-enabled ACR, use
+  the corresponding repository roles instead of `AcrPush`; runtime image-pull
+  permissions must also be reviewed for that registry mode.
+- The GitHub-hosted runner needs network access to Azure management endpoints,
+  ACR and the receiver HTTPS endpoint. Private deployments need an appropriately
+  connected runner.
+
+### First deployment
+
+1. Create the resource group, ACR, Key Vault, deployment identities/federation,
+   GitHub environment and variables out of band. Populate Key Vault secrets and
+   replace the non-secret placeholders in `infra/environments/dev.bicepparam`.
+   The workflow overrides its `image` parameter.
+2. Run **Application build and deployment** on `main` with `deploy=false`.
+   Copy the published image digest from its run summary.
+3. Run **Infrastructure deployment** with that digest and `apply=false`.
+   Review the what-if output, then rerun with `apply=true` after approval.
+   The resource group must already exist; the workflow does not create it.
+4. Upload reviewed `sources.json` into the new storage account's `sre-config`
+   container using an authorized operator identity. Initial app revisions may
+   fail until this configuration exists; the infrastructure workflow does not
+   claim application readiness.
+5. Grant the application deployment identity its app-scoped roles, then run CD
+   with `deploy=true`. Subsequent matching pushes to `main` deploy automatically
+   after CI and any environment approval.
+
+The rollout is sequential, not transactional. If the second app or readiness
+check fails, the workflow fails but the first app may already run the new image.
+Inspect both revisions and deliberately redeploy the last known good digest to
+both apps if needed (the infrastructure workflow can apply that digest with the
+reviewed parameters). There is no automatic rollback. Successful CI/CD health
+checks do not replace the live authentication/investigation gates in
+`docs/integration-gates.md`; live gates are never enabled by these workflows.
+
 ## Validation done offline
 
 - `az bicep lint --file infra/main.bicep` and `az bicep build --file infra/main.bicep` pass with no warnings (Bicep 0.39.26).
 - `az bicep build-params --file infra/environments/dev.bicepparam` passes.
 - `docker build --platform linux/amd64` passed on the previous Dockerfile. The Dockerfile is unchanged in the fix round.
-- Not run: `az deployment group validate` (needs login and an existing resource group), `hadolint` (not installed), any runtime test of `python -m azure_sre` (entrypoint is wired by the app team), and any check that the app binds 8080 or serves `/healthz` and `/readyz` (app contract pending).
+- Not run against Azure: `az deployment group validate` (needs login and an existing resource group), or live checks of port 8080 and `/healthz` and `/readyz`. These handlers and the role entrypoint are wired in the application and covered by offline tests; deployed behavior still requires live acceptance.
 
 ## Known limitations and tradeoffs
 
@@ -110,6 +194,8 @@ belong in Bicep parameters.
 - **Worker minReplicas=1** keeps durable reconcilers running but costs money while idle. Max replicas (3) is the fan-out budget; raise it deliberately.
 - **Retention:** Log Analytics 30 days; Service Bus dead-letters persist until handled (message TTL 14 days).
 - **Image base** `python:3.13-slim-bookworm` is not digest-pinned yet. Pin it before production.
-- **Contracts pending from the app team:** port 8080 binding, `/healthz` and `/readyz` handlers, `SRE_PORT`, the env names above, and the `python -m azure_sre receiver|worker` entrypoint. Any mismatch must be fixed in the app or in `main.bicep` before deployment.
+- **Live application acceptance is pending:** port 8080 binding, `/healthz` and `/readyz` handlers, `SRE_PORT`, the environment settings and the `python -m azure_sre receiver|worker` entrypoint are implemented. CI covers them offline; CD checks deployed revision health and receiver readiness, not the complete live alert pipeline.
 - **KEDA scaler identity** is declared through the `2025-01-01` API. Whether KEDA needs `Azure Service Bus Data Receiver` for the scaler is unverified and must be confirmed in the live gate.
-- **No CI workflow** is included; the repository has no connected Git remote.
+- **Workflow execution requires environment setup.** The workflows are provided,
+  but no Azure resources, OIDC federation or GitHub environment are provisioned
+  by adding these files.

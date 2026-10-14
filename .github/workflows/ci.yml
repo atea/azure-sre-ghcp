@@ -1,0 +1,67 @@
+name: Application CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    name: Lint, type-check and offline tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COPILOT_SKIP_CLI_DOWNLOAD: "1"
+      GITHUB_MCP_SERVER_PATH: ${{ github.workspace }}/.work/gms/github-mcp-server
+      SRE_SMOKE_WORKDIR: ${{ github.workspace }}/.work/smoke
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen
+      - name: Lint and type-check
+        run: |
+          uv run --frozen ruff check .
+          uv run --frozen mypy
+      - name: Prepare pinned offline runtimes
+        run: |
+          uv run --frozen python -m copilot download-runtime
+          bash scripts/fetch_github_mcp_server.sh .work/gms
+      - name: Require offline runtime gates
+        run: |
+          uv run --frozen python -m azure_sre.runtime.smoke offline
+          uv run --frozen python -m azure_sre.runtime.smoke mcp-tools --binary "$GITHUB_MCP_SERVER_PATH"
+      - name: Unit, integration and acceptance tests
+        run: uv run --frozen pytest -q -m "not live"
+
+  infrastructure:
+    name: Validate Bicep offline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Bicep
+        run: az bicep install --version v0.46.1
+      - name: Lint and compile templates and environment parameters
+        run: |
+          az bicep lint --file infra/main.bicep
+          az bicep build --file infra/main.bicep --outfile "$RUNNER_TEMP/main.json"
+          for parameters in infra/environments/*.bicepparam; do
+            az bicep build-params --file "$parameters" \
+              --outfile "$RUNNER_TEMP/$(basename "$parameters").json"
+          done

@@ -5,7 +5,7 @@ managed-identity diagnostics, bounded GitHub Copilot SDK investigation and
 host-controlled GitHub MCP issue publication. No remediation or automatic issue closure.
 
 **Offline source is not deployment acceptance.** Live authentication gates require
-the tenant, managed identities, separate inference/publisher GitHub Apps and a
+the tenant, managed identities, an inference credential (fine-grained PAT by default) separate from the publisher GitHub App, and a
 designated test deployment. See [implementation status](docs/implementation-status.md)
 and [integration gates](docs/integration-gates.md).
 

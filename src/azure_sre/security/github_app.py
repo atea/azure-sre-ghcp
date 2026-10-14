@@ -77,7 +77,7 @@ class InstallationTokenProvider:
                 )
             try:
                 body = response.json()
-                token = validate_inference_token(body["token"])
+                token = validate_inference_token(body["token"], mode="app")
                 expires_at = datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00"))
                 if expires_at.tzinfo is None or expires_at <= datetime.now(UTC):
                     raise ValueError("Expired installation token.")

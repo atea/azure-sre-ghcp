@@ -116,19 +116,24 @@ rolling back the application.
 ### GitHub environment and Azure permissions
 
 Create the `dev` environment, restrict deployment branches to `main`, and
-configure required reviewers as appropriate. Set these **environment variables**
-(not application secrets):
+configure required reviewers as appropriate. Set these **environment secrets**
+(deployment settings, not runtime application secrets):
 
-| Variable | Value |
+| Secret | Value |
 |---|---|
 | `AZURE_TENANT_ID` | Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 | `AZURE_INFRA_CLIENT_ID` | Client ID of the infrastructure deployment identity |
 | `AZURE_APP_CLIENT_ID` | Client ID of the application build/deploy identity |
 | `AZURE_RESOURCE_GROUP` | Existing target resource group |
+
+Set these **environment variables**:
+
+| Variable | Value |
+|---|---|
 | `AZURE_ACR_NAME` | Existing ACR name, matching `acrName` in the Bicep parameters |
-| `AZURE_RECEIVER_APP_NAME` | `ca-<namePrefix>-recv` (for the sample prefix: `ca-sredev-recv`) |
-| `AZURE_WORKER_APP_NAME` | `ca-<namePrefix>-wrk` (for the sample prefix: `ca-sredev-wrk`) |
+| `AZURE_RECEIVER_APP_NAME` | Required only for application deployment: `ca-<namePrefix>-recv` (for the sample prefix: `ca-sredev-recv`) |
+| `AZURE_WORKER_APP_NAME` | Required only for application deployment: `ca-<namePrefix>-wrk` (for the sample prefix: `ca-sredev-wrk`) |
 
 Give each deployment identity a GitHub OIDC federated credential with issuer
 `https://token.actions.githubusercontent.com`, audience
@@ -155,11 +160,16 @@ receiver and worker runtime managed identities.
 ### First deployment
 
 1. Create the resource group, ACR, Key Vault, deployment identities/federation,
-   GitHub environment and variables out of band. Populate Key Vault secrets and
+   GitHub environment, secrets and `AZURE_ACR_NAME` variable out of band. Grant
+   the application deployment identity `AcrPush` on the registry (or the
+   corresponding repository roles for an ABAC-enabled registry).
+   Populate Key Vault secrets and
    replace the non-secret placeholders in `infra/environments/dev.bicepparam`.
    The workflow overrides its `image` parameter.
 2. Run **Application build and deployment** on `main` with `deploy=false`.
-   Copy the published image digest from its run summary.
+   This builds and verifies the image without requiring existing Container Apps,
+   app-name variables, or app-scoped deployment permissions. Copy the published
+   image digest from its run summary.
 3. Run **Infrastructure deployment** with that digest and `apply=false`.
    Review the what-if output, then rerun with `apply=true` after approval.
    The resource group must already exist; the workflow does not create it.
@@ -167,9 +177,14 @@ receiver and worker runtime managed identities.
    container using an authorized operator identity. Initial app revisions may
    fail until this configuration exists; the infrastructure workflow does not
    claim application readiness.
-5. Grant the application deployment identity its app-scoped roles, then run CD
-   with `deploy=true`. Subsequent matching pushes to `main` deploy automatically
-   after CI and any environment approval.
+5. Set `AZURE_RECEIVER_APP_NAME` and `AZURE_WORKER_APP_NAME` to the newly created
+   apps, grant the application deployment identity its app-scoped roles, then
+   run CD with `deploy=true`. Subsequent matching pushes to `main` deploy
+   automatically after CI and any environment approval.
+
+Until the first infrastructure deployment is complete, use manual `deploy=false`
+for image publishing. Automatic CD runs still require the apps and deliberately
+fail if deployment prerequisites are missing.
 
 The rollout is sequential, not transactional. If the second app or readiness
 check fails, the workflow fails but the first app may already run the new image.

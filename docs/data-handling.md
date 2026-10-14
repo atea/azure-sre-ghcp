@@ -13,13 +13,13 @@ what is planned, and what remains unverified. It is not legal or compliance advi
 | Sanitized investigation report and evidence | Worker | Private Blob Storage; GitHub issue |
 | Operational state (incident claim, ledger, issue URL, failure category) | Worker | Azure Table Storage |
 | Copilot prompts and model responses | Copilot-hosted model via SDK | Copilot service (see disclosures) |
-| Publisher and inference credentials | GitHub Apps, Key Vault | Never stored in report, state, logs or model context |
+| Publisher and inference credentials | GitHub Apps / inference PAT, Key Vault | Never stored in report, state, logs or model context |
 
 ## Current implementation status
 
 | Control | Status |
 |---|---|
-| Installation tokens minted host-side; App keys not passed to the model | Implemented (`security/github_app.py`, `runtime/sdk_policy`) |
+| Inference credentials (fine-grained PAT or App installation token) loaded or minted host-side; PAT and App keys not passed to the model | Implemented (`security/pat_provider.py`, `security/github_app.py`, `runtime/sdk_policy`) |
 | Publisher child process given an empty environment; key passed as file path | Implemented (`runtime/mcp_policy.github_mcp_stdio_parameters`) |
 | Session env rejects `GITHUB_*`, `GH_*`, `AZURE_*`, `IDENTITY_*`, `MSI_*` and secret-like names | Implemented (`build_runtime_env`) |
 | Model has no GitHub write tools; publisher calls validated by host (repo, create-only, no close) | Implemented in policy; live proof pending (gate L4) |
@@ -33,7 +33,7 @@ what is planned, and what remains unverified. It is not legal or compliance advi
 ## Logging rules (apply now to any code added)
 
 - Log categorized, sanitized failure codes (for example `copilot_timeout`, `github_5xx`), not raw exception text. Exception messages can contain tokens, URLs with query strings, or log content.
-- Never log request headers, JWTs, installation tokens, PEM contents, connection strings, or raw Azure Monitor payloads.
+- Never log request headers, JWTs, installation tokens, PATs, PEM contents, connection strings, or raw Azure Monitor payloads.
 - Never log Log Analytics rows. Log counts and query identifiers only.
 - Do not add debug prints of model prompts or responses.
 - Local developer logs and CI output count as logs. Do not run live gates with verbose logging enabled against real data.

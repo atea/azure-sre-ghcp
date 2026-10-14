@@ -88,8 +88,9 @@ az deployment group create -g <rg> -f infra/main.bicep -p infra/environments/dev
 ```
 
 Edit `infra/environments/dev.bicepparam` placeholders first: resource/image inputs,
-webhook audience/caller/role, distinct inference and publisher App identifiers,
-inference installation/key secret name, publisher bot login and approved model.
+webhook audience/caller/role, inference auth (`inferenceAuthMode`: `pat` by default
+with `inferencePatSecretName`, or `app` with the inference App ID, installation and PEM
+secret name, distinct from the publisher App), publisher App ID, bot login and approved model.
 Diagnostic workspace and named Container Apps must be explicitly approved.
 Publisher PEM reference belongs in the reviewed `sources.json`; secret values never
 belong in Bicep parameters.

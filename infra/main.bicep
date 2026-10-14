@@ -36,13 +36,17 @@ param monitorCallerAppId string
 @minLength(1)
 param webhookRole string
 
-@description('Dedicated inference GitHub App ID, distinct from publisher App.')
-@minLength(1)
-param inferenceAppId string
-@minLength(1)
-param inferenceInstallationId string
-@minLength(1)
-param inferenceKeySecretName string
+@description('Inference auth for Copilot model calls: pat (fine-grained user PAT, default) or app (GitHub App installation token).')
+@allowed([ 'pat', 'app' ])
+param inferenceAuthMode string = 'pat'
+@description('pat mode: Key Vault secret name holding the fine-grained PAT (github_pat_). Must differ from the publisher secret.')
+param inferencePatSecretName string = ''
+@description('app mode only: dedicated inference GitHub App ID, distinct from publisher App.')
+param inferenceAppId string = ''
+@description('app mode only: inference GitHub App installation ID.')
+param inferenceInstallationId string = ''
+@description('app mode only: Key Vault secret name holding the inference App PEM.')
+param inferenceKeySecretName string = ''
 @minLength(1)
 param publisherAppId string
 @minLength(1)
@@ -176,10 +180,19 @@ var receiverEnv = [
 ]
 
 // Worker env: consume queue, durable state table, evidence container, Key Vault via SDK.
-var workerEnv = [
-  { name: 'SRE_INFERENCE_APP_ID', value: inferenceAppId }
-  { name: 'SRE_INFERENCE_INSTALLATION_ID', value: inferenceInstallationId }
-  { name: 'SRE_INFERENCE_KEY_SECRET', value: inferenceKeySecretName }
+// Only the settings for the selected inference auth mode are emitted.
+var inferenceEnv = inferenceAuthMode == 'pat'
+  ? [
+      { name: 'SRE_INFERENCE_PAT_SECRET', value: inferencePatSecretName }
+    ]
+  : [
+      { name: 'SRE_INFERENCE_APP_ID', value: inferenceAppId }
+      { name: 'SRE_INFERENCE_INSTALLATION_ID', value: inferenceInstallationId }
+      { name: 'SRE_INFERENCE_KEY_SECRET', value: inferenceKeySecretName }
+    ]
+
+var workerEnv = concat(inferenceEnv, [
+  { name: 'SRE_INFERENCE_AUTH_MODE', value: inferenceAuthMode }
   { name: 'SRE_INFERENCE_VAULT_URL', value: keyVault.properties.vaultUri }
   { name: 'SRE_PUBLISHER_APP_ID', value: publisherAppId }
   { name: 'SRE_PUBLISHER_BOT_LOGIN', value: publisherBotLogin }
@@ -193,7 +206,7 @@ var workerEnv = [
   { name: 'SRE_SOURCE_CONFIG_URL', value: sourceConfigUrl }
   { name: 'AZURE_KEY_VAULT_URL', value: keyVault.properties.vaultUri }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: monitoring.outputs.appInsightsConnectionString }
-]
+])
 
 module containerApps 'modules/containerapps.bicep' = {
   name: 'containerapps'

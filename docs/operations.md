@@ -11,7 +11,7 @@ is passed and recorded.
 |---|---|
 | SDK/runtime policy, deny-by-default permissions, disposal (`azure_sre.runtime.sdk_policy`) | Implemented, offline-tested |
 | MCP publisher policy: repository target, allowed tools, create-only/no-close rules (`mcp_policy.validate_call`) | Implemented, offline-tested; host enforcement only |
-| GitHub App installation-token provider (`security/github_app.py`) | Implemented; live refresh unverified (gate L2) |
+| Inference token suppliers: fine-grained PAT (`security/pat_provider.py`, default) and GitHub App installation token (`security/github_app.py`), selected by `SRE_INFERENCE_AUTH_MODE` | Implemented; live inference and refresh unverified (gates L1/L2) |
 | Bicep scaffold: messaging (DLQ after 10 deliveries, 14-day TTL), storage, monitoring, RBAC, Container Apps | Written, **not deployed** |
 | Receiver, registry, worker, state, diagnostics, redaction, investigation, publisher and reconciliation | Implemented and offline-tested; live acceptance pending |
 
@@ -73,7 +73,7 @@ Four identities must stay separate. Verify each during onboarding and after ever
 |---|---|---|---|
 | Inbound webhook | Entra app registration; app role for the Azure Monitor caller | Receiver validation only | Grant Azure or GitHub access |
 | Azure access | Separate receiver and worker user-assigned managed identities | Reader and Log Analytics Reader on approved diagnostic scopes; queue send/config read (receiver), queue receive/state/evidence/named host credentials (worker) | Mutate monitored resources; expose host credentials to model |
-| Inference | Copilot Requests GitHub App installation token (`ghs_`) | Copilot model access in the organization | Be a user token or PAT; fall back to stored user login |
+| Inference | `SRE_INFERENCE_AUTH_MODE=pat` (default): fine-grained PAT (`github_pat_`) of a dedicated account with a Copilot seat and the **Copilot Requests** permission. `app`: Copilot Requests GitHub App installation token (`ghs_`) | Copilot model access only | Be a classic PAT (`ghp_`), OAuth or user-to-server token; grant repository access; be shared with the publisher; fall back to stored user login |
 | Publication | Publisher GitHub App, selected private repositories, Issues read/write only | Issue create/read/search and comments on approved repos | Access other repos, close issues, or be visible to the model |
 
 Verification checklist (per environment):
@@ -85,11 +85,29 @@ Verification checklist (per environment):
 
 ## 3. Token rotation
 
-### GitHub inference token (Copilot Requests App)
+### GitHub inference token
+
+Inference uses `SRE_INFERENCE_AUTH_MODE`. The default is `pat`, a stopgap because Copilot model inference does not accept GitHub App installation tokens today. The `app` mode is kept so the service can switch back without code changes.
+
+#### `pat` mode (default): fine-grained PAT
+
+- **Account:** a dedicated service account (not a personal account) with an assigned Copilot seat. Usage, billing and audit are attributed to this account. Record the account owner in the change record.
+- **Token:** a fine-grained PAT (`github_pat_`) with only the **Copilot Requests** account permission, no repository access and an explicit expiry (90 days or less). Classic PATs (`ghp_`) are rejected.
+- **Storage:** a Key Vault secret named by `inferencePatSecretName` (`SRE_INFERENCE_PAT_SECRET`). It must differ from the publisher secret. The worker reads it with its managed identity. It is cached in memory for 15 minutes and re-read on SDK refresh, so it never reaches the model, environment variables or logs.
+- **Rotation:**
+  1. Create a new PAT before the old one expires.
+  2. Store it as a new version of the same Key Vault secret.
+  3. Wait up to 15 minutes, or restart the worker revision.
+  4. Confirm a successful investigation, then revoke the old PAT in GitHub.
+- **Expiry monitoring:** track the PAT expiry date and alert at least 14 days before it.
+- **Revocation:** revoke the PAT in the service account's GitHub settings and disable the Key Vault secret version. Investigations then fail in a bounded way, with partial or retryable outcomes.
+
+#### `app` mode: GitHub App installation token
 
 - Installation tokens are short-lived. The provider in `security/github_app.py` mints them from the App key and caches them. Live refresh past expiry is **gate L2 and unverified**.
 - Rotation procedure: rotate the App private key in GitHub, store the new PEM in Key Vault under a new version, update the Key Vault reference, restart the worker revision, then confirm a fresh token is minted in logs (sanitized, no token values).
-- If refresh fails in a live session, the expected behavior is a bounded failure and a visible partial or retryable outcome, not a stored-user fallback. Do not work around this by adding a PAT.
+
+In both modes, a refresh failure in a live session must end in a bounded failure with a visible partial or retryable outcome, never a stored-user fallback.
 
 ### Publisher App key
 

@@ -87,8 +87,8 @@ and non-production subscription.
 
 | # | Gate (WP1 acceptance) | Prerequisites | Opt-in command / procedure |
 |---|---|---|---|
-| L1 | SDK session with a real model: the model calls an allowlisted tool, a decoy is never executed, abort works, disposal is clean | Copilot Requests GitHub App installed on the org; Copilot org enablement and billing; a **`ghs_` installation token** minted by a token supplier (never a user/PAT token); model name | `SRE_LIVE_GATES=1 SRE_COPILOT_INSTALLATION_TOKEN=<ghs_…> uv run python -m azure_sre.runtime.smoke live --model <model>` or `SRE_LIVE_GATES=1 SRE_LIVE_MODEL=<model> SRE_COPILOT_INSTALLATION_TOKEN=… uv run pytest -m live` |
-| L2 | Installation-token routing and refresh (expiry under `github_token_provider`) | As L1, plus a Key Vault-backed App private key | Provider implemented with offline cache/refresh tests. Run a real session past expiry and assert refreshed credentials, with no stored-user fallback. |
+| L1 | SDK session with a real model: the model calls an allowlisted tool, a decoy is never executed, abort works, disposal is clean | Copilot org enablement and billing; default `pat` mode: a **fine-grained PAT (`github_pat_`)** from a dedicated account with a Copilot seat and the Copilot Requests permission (`app` mode: a `ghs_` installation token); model name. This gate must confirm that the SDK accepts `github_pat_` for inference | `SRE_LIVE_GATES=1 SRE_COPILOT_INFERENCE_TOKEN=<github_pat_…> uv run python -m azure_sre.runtime.smoke live --model <model>` or `SRE_LIVE_GATES=1 SRE_LIVE_MODEL=<model> SRE_COPILOT_INFERENCE_TOKEN=… uv run pytest -m live`. Add `SRE_INFERENCE_AUTH_MODE=app` for a `ghs_` token. `SRE_COPILOT_INSTALLATION_TOKEN` is a deprecated alias |
+| L2 | Inference token routing and refresh under `github_token_provider` | As L1, plus a Key Vault-backed PAT secret (`pat`) or App private key (`app`) | Both providers are implemented with offline cache and refresh tests. Run a real session past the cache window or token expiry, and confirm credentials are re-read with no stored-user fallback. For `pat`, also confirm that rotating the Key Vault secret version takes effect without a restart. |
 | L3 | Managed-identity Azure CLI inside Container Apps | Tenant, subscription, pilot environment, explicit UAMI with diagnostic Reader + Log Analytics Reader | Image and CLI adapter implemented. Verify `az login --identity --client-id`, historical template reads, MI profile refresh, and denied mutations on throwaway resources. |
 | L4 | MCP App auth: create/read/reconcile/comment in the test repo | Separate publisher App ID/install/bot login, selected test repo, Key Vault PEM | Publisher implemented. Pilot real writes and deliberately lost responses against a mapped test repository; verify bot author/marker and no blind retries. |
 | L5 | Real Monitor secure-webhook validation | Entra audience/app role/caller IDs and secure action group | Ingress implemented. Validate real JWT issuer/audience/role/caller and measured durable acceptance latency. |
@@ -99,10 +99,10 @@ and non-production subscription.
 Import these and do not re-wire the SDK or MCP directly.
 
 - `azure_sre.runtime.sdk_policy`
-  - `create_isolated_client(base_directory, workspace, inference_token, runtime_path=None, extra_env=None, log_level=...)` builds an empty-mode client with an explicit env, no auto-login, and only `ghs_` tokens.
+  - `create_isolated_client(base_directory, workspace, inference_token, inference_auth_mode="pat", runtime_path=None, extra_env=None, log_level=...)` builds an empty-mode client with an explicit env, no auto-login, and only the token type for the mode (`github_pat_` for `pat`, `ghs_` for `app`).
   - `create_isolated_session(client, tools, workspace, permissions=None, model=None, **opts) -> (session, permissions)` sets the allowlist to exactly the given custom tools and denies everything else by default.
   - `DenyByDefaultPermissions(allowed_custom_tools)` keeps a `.audit` list of `PermissionAuditEntry`. `custom_tool_allowlist(names)`.
-  - `build_runtime_env(home, extra=None)` rejects `GITHUB_*`, `GH_*`, `AZURE_*`, `IDENTITY_*`, `MSI_*` and secret-like names. `validate_inference_token(token)`.
+  - `build_runtime_env(home, extra=None)` rejects `GITHUB_*`, `GH_*`, `AZURE_*`, `IDENTITY_*`, `MSI_*` and secret-like names. `validate_inference_auth_mode(mode)` and `validate_inference_token(token, mode=...)`.
   - `execute_tool_directly(session, name, args)` is for tests and gates only. `dispose(client, session) -> list[str]` returns errors and never raises.
   - `PolicyError`.
 - `azure_sre.runtime.mcp_policy`
@@ -117,7 +117,7 @@ Import these and do not re-wire the SDK or MCP directly.
 
 ## Remaining blockers
 
-1. No Copilot Requests GitHub App, installation, org enablement or billing, and no `ghs_` token supplier, so L1 and L2 cannot run.
+1. No Copilot-seated service account with a fine-grained PAT (or Copilot Requests App installation), org enablement or billing, so L1 and L2 cannot run.
 2. No Azure tenant, subscription, managed identity or Container Apps environment, so L3 cannot run.
 3. No publisher GitHub App, Key Vault PEM or test repository, so L4 cannot run.
 4. No Entra app registration or action group for secure webhooks, so L5 cannot run.

@@ -17,7 +17,7 @@ Container Apps Jobs, other workload types and remediation are out of scope.
 |---|---|---|
 | Entra app registration (webhook audience) with an application role | Tenant admin | Role assignment is manual; Bicep does not create it |
 | Azure Monitor action group with secure webhook enabled | Platform team | Points at the receiver; test sink for test alerts |
-| Copilot Requests GitHub App installed in the organization | GitHub org admin | Copilot enablement and billing must be confirmed; installation scope requirement needs policy verification |
+| Inference credential: a dedicated service account with a Copilot seat and a fine-grained PAT (Copilot Requests permission only), stored in Key Vault (default `pat` mode). `app` mode needs a Copilot Requests GitHub App installation instead | GitHub org admin and platform team | Copilot enablement and billing must be confirmed. Record the PAT expiry and set an alert; see [operations](operations.md#github-inference-token) |
 | Publisher GitHub App, installed on **selected** repositories only, Issues read/write | GitHub org admin | Never grant broader permissions |
 | Key Vault secret holding the publisher App PEM | Platform team | Reference only; never paste the key into docs or chat |
 | Test repository for pilot issues | Repo owner | Used before any production repository |

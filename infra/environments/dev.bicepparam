@@ -8,18 +8,18 @@ param tags = {
 }
 
 // Existing resources supplied out of band (not created here).
-param acrName = '<existing-acr-name>'
-param keyVaultName = '<existing-key-vault-name>'
-param image = '<acr-login-server>/azure-sre-copilot:<tag-or-digest>'
-param webhookAudience = '<approved-api-audience>'
-param monitorCallerAppId = '00000000-0000-0000-0000-000000000000'
-param webhookRole = '<assigned-application-role>'
+param acrName = 'ghcpsreacr'
+param keyVaultName = 'ghcpsrekv'
+param image = 'ghcpsreacr.azurecr.io/azure-sre-copilot:<tag-or-digest>'
+param webhookAudience = 'api://789a0e7b-12ac-4de1-97bc-29c392ea8e53/ActionGroupsSecureWebhook'
+param monitorCallerAppId = 'b57d1b8d-74bb-4a59-a763-712211091862'
+param webhookRole = 'ActionGroupsSecureWebhook'
 param inferenceAppId = '<inference-github-app-id>'
 param inferenceInstallationId = '<inference-installation-id>'
 param inferenceKeySecretName = '<inference-pem-secret-name>'
-param publisherAppId = '<separate-publisher-github-app-id>'
-param publisherBotLogin = '<publisher-app-slug>[bot]'
-param copilotModel = '<approved-copilot-model>'
+param publisherAppId = '5308134'
+param publisherBotLogin = 'GHCopilotSREAgent[bot]'
+param copilotModel = 'gpt-6-luna'
 
 // Leave empty unless the diagnostics workspace is explicitly approved for worker read access.
 param diagnosticsWorkspaceName = ''

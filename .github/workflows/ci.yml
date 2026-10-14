@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      COPILOT_SKIP_CLI_DOWNLOAD: "1"
       GITHUB_MCP_SERVER_PATH: ${{ github.workspace }}/.work/gms/github-mcp-server
       SRE_SMOKE_WORKDIR: ${{ github.workspace }}/.work/smoke
     steps:
@@ -41,6 +40,8 @@ jobs:
           uv run --frozen python -m copilot download-runtime
           bash scripts/fetch_github_mcp_server.sh .work/gms
       - name: Require offline runtime gates
+        env:
+          COPILOT_SKIP_CLI_DOWNLOAD: "1"
         run: |
           uv run --frozen python -m azure_sre.runtime.smoke offline
           uv run --frozen python -m azure_sre.runtime.smoke mcp-tools --binary "$GITHUB_MCP_SERVER_PATH"

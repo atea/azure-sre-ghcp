@@ -11,7 +11,7 @@ param tags = {
 param acrName = 'ghcpsreacr'
 param keyVaultName = 'ghcpsrekv'
 param image = 'ghcpsreacr.azurecr.io/azure-sre-copilot:<tag-or-digest>'
-param webhookAudience = '789a0e7b-12ac-4de1-97bc-29c392ea8e53/ActionGroupsSecureWebhook'
+param webhookAudience = 'api://789a0e7b-12ac-4de1-97bc-29c392ea8e53'
 param monitorCallerAppId = 'b57d1b8d-74bb-4a59-a763-712211091862'
 param webhookRole = 'ActionGroupsSecureWebhook'
 // Inference auth: 'pat' (default) uses a fine-grained user PAT stored in Key Vault.

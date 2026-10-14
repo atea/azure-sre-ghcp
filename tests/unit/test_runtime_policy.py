@@ -58,11 +58,27 @@ def test_runtime_env_is_minimal_and_rejects_credentials(tmp_path: Path) -> None:
             sdk_policy.build_runtime_env(home=tmp_path, extra={bad: "v"}, source={})
 
 
-@pytest.mark.parametrize("token", ["ghp_x", "gho_x", "ghu_x", "github_pat_x", "random"])
-def test_inference_token_rejects_non_installation_tokens(token: str) -> None:
+@pytest.mark.parametrize("token", ["ghp_x", "gho_x", "ghu_x", "ghr_x", "github_pat_x", "random"])
+def test_app_mode_accepts_only_installation_tokens(token: str) -> None:
     with pytest.raises(sdk_policy.PolicyError):
-        sdk_policy.validate_inference_token(token)
-    assert sdk_policy.validate_inference_token(" ghs_abc ") == "ghs_abc"
+        sdk_policy.validate_inference_token(token, mode="app")
+    assert sdk_policy.validate_inference_token(" ghs_abc ", mode="app") == "ghs_abc"
+
+
+@pytest.mark.parametrize("token", ["ghp_x", "gho_x", "ghu_x", "ghr_x", "ghs_x", "random"])
+def test_pat_mode_accepts_only_fine_grained_pats(token: str) -> None:
+    with pytest.raises(sdk_policy.PolicyError):
+        sdk_policy.validate_inference_token(token, mode="pat")
+    assert sdk_policy.validate_inference_token(" github_pat_abc ", mode="pat") == "github_pat_abc"
+
+
+def test_inference_auth_mode_is_restricted() -> None:
+    assert sdk_policy.DEFAULT_INFERENCE_AUTH_MODE == "pat"
+    assert sdk_policy.validate_inference_auth_mode(" APP ") == "app"
+    with pytest.raises(sdk_policy.PolicyError):
+        sdk_policy.validate_inference_auth_mode("oauth")
+    with pytest.raises(sdk_policy.PolicyError):
+        sdk_policy.validate_inference_token("github_pat_x", mode="oauth")
 
 
 TARGET = mcp_policy.RepositoryTarget("org", "repo")

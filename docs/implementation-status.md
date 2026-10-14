@@ -26,8 +26,10 @@ allowed. See [integration gates](integration-gates.md) for external prerequisite
 ## Source milestones
 
 - Python dependency lock and offline SDK/MCP integration baseline are verified.
-- Inference installation-token supplier includes expiring cache, forced refresh and
-  approved-host checks; live token renewal is still unverified.
+- Inference token suppliers are selected by `SRE_INFERENCE_AUTH_MODE`. The default is
+  `pat`, a vault-stored fine-grained PAT. `app` mints an installation token. Both have
+  caching, forced refresh and approved-host checks. Live inference with a PAT and live
+  token renewal are still unverified.
 - Bicep templates compile. Receiver has no Key Vault credentials; worker diagnostic
   Reader grants are explicit per Container App and approved workspace.
 - The amd64 image built locally as non-root with preinstalled runtime, MCP and CLI.
@@ -78,16 +80,19 @@ pass. The rebuilt non-root image passes actual SDK/tool-policy and MCP discovery
 smokes. See [offline acceptance](offline-acceptance.md) for external seams replaced
 by fakes; none of these checks substitute for live deployment acceptance.
 
-Worker settings require distinct `SRE_INFERENCE_APP_ID` / `SRE_PUBLISHER_APP_ID`,
-`SRE_INFERENCE_INSTALLATION_ID`, named inference Key Vault secret and vault URL,
+Worker inference settings depend on `SRE_INFERENCE_AUTH_MODE`. The default `pat` mode
+requires `SRE_INFERENCE_PAT_SECRET`. The `app` mode requires `SRE_INFERENCE_APP_ID`
+(distinct from `SRE_PUBLISHER_APP_ID`), `SRE_INFERENCE_INSTALLATION_ID` and
+`SRE_INFERENCE_KEY_SECRET`. Both modes require `SRE_INFERENCE_VAULT_URL` and an inference
+secret separate from the publisher secret. The worker also requires
 `SRE_PUBLISHER_BOT_LOGIN`, `SRE_MODEL`, queue/Table/Blob coordinates and explicit
 managed identity. Publisher key reference comes from reviewed JSON config.
 Misconfigured/missing settings fail startup. No secrets belong in environment
-parameters; the host loads named PEM secrets from Key Vault.
+parameters; the host loads named PEM/PAT secrets from Key Vault.
 
 ## Remaining production gates
 
-Provide the real tenant/resource identifiers, both GitHub App installations,
+Provide the real tenant/resource identifiers, the inference PAT account (or App) and publisher App installation,
 Entra audience/role/caller, approved data fields, private test repository and model
 policy/billing. Verify deployed managed-identity CLI refresh, actual telemetry
 schema, JWT shape, KEDA scaling/RBAC, latency, App token expiry and real publication

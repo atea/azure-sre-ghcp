@@ -51,9 +51,17 @@ _SECRET_LIKE = re.compile(
 )
 _FORBIDDEN_PREFIXES = ("GITHUB_", "GH_", "AZURE_", "IDENTITY_", "MSI_", "COPILOT_SDK_AUTH")
 
-# GitHub token prefixes. Only installation tokens (ghs_) are acceptable for inference.
-_USER_TOKEN_PREFIXES = ("ghp_", "gho_", "ghu_", "github_pat_", "ghr_")
+# GitHub token prefixes accepted for inference, per auth mode:
+# * ``pat`` (default): a fine-grained personal access token (``github_pat_``) for a
+#   dedicated user with a Copilot seat and the "Copilot Requests" permission.
+# * ``app``: a GitHub App installation token (``ghs_``).
+# Classic PATs, OAuth, user-to-server and refresh tokens are never accepted.
 INSTALLATION_TOKEN_PREFIX = "ghs_"  # noqa: S105 - prefix, not a secret
+PAT_TOKEN_PREFIX = "github_pat_"  # noqa: S105 - prefix, not a secret
+INFERENCE_AUTH_MODES = ("pat", "app")
+DEFAULT_INFERENCE_AUTH_MODE = "pat"
+_ALWAYS_REJECTED_PREFIXES = ("ghp_", "gho_", "ghu_", "ghr_")
+_MODE_PREFIX = {"pat": PAT_TOKEN_PREFIX, "app": INSTALLATION_TOKEN_PREFIX}
 
 
 class PolicyError(ValueError):
@@ -120,13 +128,25 @@ def build_runtime_env(
     return env
 
 
-def validate_inference_token(token: str) -> str:
-    """Accept only GitHub App installation tokens; never user/PAT credentials."""
+def validate_inference_auth_mode(mode: str) -> str:
+    mode = mode.strip().lower()
+    if mode not in INFERENCE_AUTH_MODES:
+        raise PolicyError(f"Inference auth mode must be one of {INFERENCE_AUTH_MODES}.")
+    return mode
+
+
+def validate_inference_token(token: str, *, mode: str) -> str:
+    """Accept only the token type configured for ``mode``.
+
+    ``pat`` accepts fine-grained PATs (``github_pat_``); ``app`` accepts installation
+    tokens (``ghs_``). Classic PATs and OAuth/user-to-server tokens are always rejected.
+    """
+    expected = _MODE_PREFIX[validate_inference_auth_mode(mode)]
     token = token.strip()
-    if token.startswith(_USER_TOKEN_PREFIXES):
-        raise PolicyError("User or personal access tokens are not permitted for inference.")
-    if not token.startswith(INSTALLATION_TOKEN_PREFIX):
-        raise PolicyError("Inference requires a GitHub App installation token (ghs_ prefix).")
+    if token.startswith(_ALWAYS_REJECTED_PREFIXES):
+        raise PolicyError("Classic PAT, OAuth or user-to-server tokens are not permitted.")
+    if not token.startswith(expected):
+        raise PolicyError(f"Inference auth mode {mode!r} requires a {expected}-prefixed token.")
     return token
 
 
@@ -135,6 +155,7 @@ def create_isolated_client(
     base_directory: Path,
     workspace: Path,
     inference_token: str | None = None,
+    inference_auth_mode: str = DEFAULT_INFERENCE_AUTH_MODE,
     runtime_path: str | None = None,
     extra_env: Mapping[str, str] | None = None,
     log_level: str = "error",
@@ -146,7 +167,11 @@ def create_isolated_client(
     """
     base_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
-    token = validate_inference_token(inference_token) if inference_token else None
+    token = (
+        validate_inference_token(inference_token, mode=inference_auth_mode)
+        if inference_token
+        else None
+    )
     return CopilotClient(
         mode="empty",
         connection=RuntimeConnection.for_stdio(path=runtime_path),

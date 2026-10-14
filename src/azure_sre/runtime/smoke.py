@@ -155,18 +155,28 @@ async def run_mcp_tools(binary: Path) -> dict[str, bool]:
 async def run_live(model: str, turn_timeout_s: float) -> dict[str, bool]:
     if os.environ.get("SRE_LIVE_GATES") != "1":
         raise SystemExit("Live gates are opt-in: set SRE_LIVE_GATES=1.")
-    token = os.environ.get("SRE_COPILOT_INSTALLATION_TOKEN")
+    token_var = "SRE_COPILOT_INFERENCE_TOKEN"  # noqa: S105 - variable name, not a secret
+    legacy_var = "SRE_COPILOT_INSTALLATION_TOKEN"
+    token = os.environ.get(token_var) or os.environ.get(legacy_var)
     if not token:
         raise SystemExit(
-            "SRE_COPILOT_INSTALLATION_TOKEN (GitHub App installation token) is required."
+            f"{token_var} is required: a fine-grained PAT (github_pat_) by default, or a "
+            "GitHub App installation token (ghs_) with SRE_INFERENCE_AUTH_MODE=app."
         )
+    auth_mode = os.environ.get("SRE_INFERENCE_AUTH_MODE", "").strip() or (
+        sdk_policy.DEFAULT_INFERENCE_AUTH_MODE
+    )
     results: dict[str, bool] = {}
     root = _work_root()
     tools = SmokeTools()
     client = sdk_policy.create_isolated_client(
-        base_directory=root / "home-live", workspace=root / "ws-live", inference_token=token
+        base_directory=root / "home-live",
+        workspace=root / "ws-live",
+        inference_token=token,
+        inference_auth_mode=auth_mode,
     )
-    os.environ.pop("SRE_COPILOT_INSTALLATION_TOKEN", None)
+    os.environ.pop(token_var, None)
+    os.environ.pop(legacy_var, None)
     session = None
     try:
         perms = sdk_policy.DenyByDefaultPermissions(frozenset({ECHO_TOOL}))

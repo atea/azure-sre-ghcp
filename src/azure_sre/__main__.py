@@ -7,6 +7,8 @@ import asyncio
 import logging
 import os
 import tempfile
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -21,6 +23,7 @@ from azure_sre.ingress.app import create_app
 from azure_sre.ingress.servicebus import ServiceBusAlertSender
 from azure_sre.ingress.settings import IngressSettings
 from azure_sre.pipeline import build_investigator
+from azure_sre.runtime.sdk_policy import DEFAULT_INFERENCE_AUTH_MODE, validate_inference_auth_mode
 from azure_sre.security.key_vault import PrivateKeyLoader
 from azure_sre.worker.service import AzureWorkerEndpoints, run_worker
 
@@ -70,16 +73,64 @@ async def run_role(role: str) -> None:
     await serve_worker()
 
 
+@dataclass(frozen=True)
+class InferenceSettings:
+    auth_mode: str
+    vault_url: str
+    secret_name: str
+    app_id: str | None = None
+    installation_id: str | None = None
+
+
+def resolve_inference_settings(
+    env: Mapping[str, str], *, publisher_app_id: str, publisher_secret_name: str
+) -> InferenceSettings:
+    """Resolve inference credentials for ``SRE_INFERENCE_AUTH_MODE`` (``pat`` default, or ``app``).
+
+    Inference and publisher credentials must always reference separate secrets.
+    """
+
+    def required(name: str) -> str:
+        value = env.get(name, "").strip()
+        if not value:
+            raise ValueError(f"Required deployment setting is missing: {name}")
+        return value
+
+    mode = validate_inference_auth_mode(
+        env.get("SRE_INFERENCE_AUTH_MODE", "").strip() or DEFAULT_INFERENCE_AUTH_MODE
+    )
+    app_id: str | None = None
+    installation_id: str | None = None
+    if mode == "pat":
+        secret = required("SRE_INFERENCE_PAT_SECRET")
+    else:
+        secret = required("SRE_INFERENCE_KEY_SECRET")
+        app_id = required("SRE_INFERENCE_APP_ID")
+        installation_id = required("SRE_INFERENCE_INSTALLATION_ID")
+        if app_id == publisher_app_id:
+            raise ValueError("Inference and publisher GitHub Apps must be separate.")
+    if secret == publisher_secret_name:
+        raise ValueError("Inference and publisher credentials must use separate vault secrets.")
+    return InferenceSettings(
+        auth_mode=mode,
+        vault_url=required("SRE_INFERENCE_VAULT_URL"),
+        secret_name=secret,
+        app_id=app_id,
+        installation_id=installation_id,
+    )
+
+
 async def serve_worker() -> None:
     config = await load_service_config(os.environ)
     if config.publisher is None:
         raise ValueError("Worker requires the separate publisher Key Vault reference.")
     client_id = required_setting("AZURE_CLIENT_ID")
-    inference_app_id = required_setting("SRE_INFERENCE_APP_ID")
     publisher_app_id = required_setting("SRE_PUBLISHER_APP_ID")
-    inference_secret = required_setting("SRE_INFERENCE_KEY_SECRET")
-    if inference_app_id == publisher_app_id or inference_secret == config.publisher.secret_name:
-        raise ValueError("Inference and publisher identities and private keys must be separate.")
+    inference = resolve_inference_settings(
+        os.environ,
+        publisher_app_id=publisher_app_id,
+        publisher_secret_name=config.publisher.secret_name,
+    )
     endpoints = AzureWorkerEndpoints(
         managed_identity_client_id=client_id,
         service_bus_namespace=required_setting("AZURE_SERVICEBUS_NAMESPACE"),
@@ -108,12 +159,13 @@ async def serve_worker() -> None:
                 root=root / "investigations",
                 http=http,
                 client_id=client_id,
-                inference_app_id=inference_app_id,
-                inference_installation_id=required_setting("SRE_INFERENCE_INSTALLATION_ID"),
-                inference_vault_url=required_setting("SRE_INFERENCE_VAULT_URL"),
-                inference_secret_name=inference_secret,
                 runtime_path=required_setting("COPILOT_CLI_PATH"),
                 model=required_setting("SRE_MODEL"),
+                inference_auth_mode=inference.auth_mode,
+                inference_vault_url=inference.vault_url,
+                inference_secret_name=inference.secret_name,
+                inference_app_id=inference.app_id,
+                inference_installation_id=inference.installation_id,
             )
             publisher = McpPublisher(
                 registry=config.registry,

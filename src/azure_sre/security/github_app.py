@@ -20,6 +20,15 @@ class AppAuthenticationError(RuntimeError):
     """Safe authentication failure that does not contain tokens or HTTP bodies."""
 
 
+def sign_app_jwt(app_id: str, private_key: str) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"iat": now - 60, "exp": now + 540, "iss": app_id},
+        private_key,
+        algorithm="RS256",
+    )
+
+
 class InstallationToken(BaseModel):
     model_config = ConfigDict(frozen=True)
     token: SecretStr
@@ -54,12 +63,7 @@ class InstallationTokenProvider:
                 return self._cached
             self._cached = None
             private_key = await self.load_private_key()
-            now = int(time.time())
-            signed = jwt.encode(
-                {"iat": now - 60, "exp": now + 540, "iss": self.app_id},
-                private_key,
-                algorithm="RS256",
-            )
+            signed = sign_app_jwt(self.app_id, private_key)
             response = await self.client.post(
                 f"https://api.github.com/app/installations/{self.installation_id}/access_tokens",
                 headers={

@@ -42,6 +42,24 @@ the following is true:
 `reconcile` maps rejections to `UNCERTAIN` with `retryable=False` instead, because it
 can never prove absence for a request it refuses to inspect.
 
+Before each MCP launch, the host signs a short-lived GitHub App JWT using the App ID
+and Key Vault PEM, then calls `GET /repos/{owner}/{repo}/installation` on
+`api.github.com`. Discovery is scoped to the trusted repository, not the first
+installation of the App. The returned installation must belong to this App, be
+unsuspended, and match the registry's `installation_id`. The discovered ID is then
+passed to MCP. Discovery performs no issue writes and never falls back to another
+installation or user credentials.
+
+Setup errors distinguish `publisher_private_key_invalid`, `repository_installation_not_found`
+(App not installed or repository inaccessible), `repository_installation_suspended`,
+`repository_installation_mismatch`, `installation_lookup_denied`, and
+`installation_lookup_invalid_response`; these require configuration/operator action.
+Network errors, rate limits and GitHub server errors give retryable
+`installation_lookup_unavailable`. Raw tokens, PEMs and response bodies are not logged.
+If an App is reinstalled, review and update the configured installation ID; discovery
+does not silently authorize the replacement. Offline tests inject the discovery
+boundary; real GitHub authentication remains a live integration gate.
+
 ## Process and secret handling
 
 Each operation starts a fresh server process:

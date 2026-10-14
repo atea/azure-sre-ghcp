@@ -34,6 +34,7 @@ import azure_sre.github as gh
 from azure_sre import contracts as c
 from azure_sre.config import BudgetPolicy
 from azure_sre.github import McpPublisher
+from azure_sre.runtime.mcp_policy import RepositoryTarget
 from azure_sre.state.records import issue_marker, recovery_marker
 from azure_sre.worker import PublishRequest, RecoveryRequest
 from tests.unit.test_worker_support import REGISTRY, complete_report, make_alert
@@ -44,6 +45,11 @@ BOT = "azure-sre-app[bot]"
 FIXTURE_PATH = Path(gh.__file__).parent / "gms_tools_v2_0_2.json"
 FIXTURE: dict[str, Any] = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 TEST_PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIfake\n-----END RSA PRIVATE KEY-----\n"
+
+
+async def resolve_installation(app_id: str, pem: str, target: RepositoryTarget) -> int:
+    assert app_id and pem and target == RepositoryTarget(owner=OWNER, repo=NAME)
+    return 42
 
 
 def real_tools() -> list[Tool]:
@@ -267,6 +273,7 @@ def make_publisher(
         author_login=kwargs.pop("author_login", BOT),
         private_root=private_root,
         session_factory=factory_for(github),
+        installation_resolver=kwargs.pop("installation_resolver", resolve_installation),
         **kwargs,
     )
 

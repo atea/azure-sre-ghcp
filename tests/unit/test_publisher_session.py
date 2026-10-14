@@ -32,6 +32,7 @@ from tests.unit.test_publisher_support import (
     entries,
     factory_for,
     real_tools,
+    resolve_installation,
 )
 
 TARGET = RepositoryTarget(owner="contoso", repo="shop")
@@ -54,6 +55,7 @@ def session_kwargs(gh: FakeGitHub, root: Path, **overrides: Any) -> dict[str, An
         "target": TARGET,
         "factory": factory_for(gh),
         "private_root": root,
+        "installation_resolver": resolve_installation,
         **overrides,
     }
 
@@ -183,6 +185,9 @@ async def test_real_server_discovery_matches_fixture(tmp_path: Path) -> None:
     async def loader() -> str:
         return pem
 
+    async def offline_resolver(app_id: str, pem: str, target: RepositoryTarget) -> int:
+        return 1
+
     async with open_publisher_session(
         binary=GMS_PATH,
         app_id="1",
@@ -192,6 +197,7 @@ async def test_real_server_discovery_matches_fixture(tmp_path: Path) -> None:
         factory=stdio_session_factory,
         startup_timeout_seconds=20,
         private_root=tmp_path,
+        installation_resolver=offline_resolver,
     ):
         pass  # initialize + version + schema checks all ran
     assert entries(tmp_path) == []

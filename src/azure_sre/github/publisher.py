@@ -37,10 +37,12 @@ from azure_sre.contracts import (
     Sink,
 )
 from azure_sre.github.mcp_client import (
+    InstallationResolver,
     McpSetupError,
     PublisherSession,
     SessionFactory,
     ToolResponse,
+    discover_repository_installation,
     open_publisher_session,
     single_leaf,
     stdio_session_factory,
@@ -222,6 +224,7 @@ class McpPublisher:
         reconcile_lookback: timedelta = timedelta(minutes=5),
         private_root: Path | None = None,
         session_factory: SessionFactory = stdio_session_factory,
+        installation_resolver: InstallationResolver = discover_repository_installation,
     ) -> None:
         if not app_id.isdecimal():
             raise ValueError("GitHub App ID must be a decimal identifier.")
@@ -248,6 +251,7 @@ class McpPublisher:
         self._lookback = reconcile_lookback
         self._private_root = private_root
         self._factory = session_factory
+        self._installation_resolver = installation_resolver
 
     # ------------------------------------------------------------------ validation
 
@@ -338,6 +342,7 @@ class McpPublisher:
             startup_timeout_seconds=self._startup_timeout,
             call_timeout_seconds=self._call_timeout,
             private_root=self._private_root,
+            installation_resolver=self._installation_resolver,
         ) as session:
             return await body(session, progress)
 

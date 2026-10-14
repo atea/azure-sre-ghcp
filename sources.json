@@ -33,12 +33,12 @@
   },
   "webhook_callers": [
     {
-      "object_id": "2ff0ab60-d6b6-49b7-9c91-095a6cf2775f",
+      "object_id": "e48aaafe-5963-4e94-b1f2-01773e234bab",
       "sink": "production"
     }
   ],
   "publisher": {
     "key_vault_uri": "https://ghcpsrekv.vault.azure.net/",
-    "secret_name": "githubpublisherappid"
+    "secret_name": "githubpublisherpem"
   }
 }

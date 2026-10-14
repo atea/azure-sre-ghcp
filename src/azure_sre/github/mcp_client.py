@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Any, Final, Protocol, TextIO
 
 import anyio
+import httpx
+import jwt
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.types import CallToolResult, ListToolsResult, PaginatedRequestParams, TextContent
@@ -43,6 +45,7 @@ from azure_sre.runtime.mcp_policy import (
     github_mcp_stdio_parameters,
     validate_call,
 )
+from azure_sre.security.github_app import sign_app_jwt
 
 __all__ = [
     "MAX_RESPONSE_CHARS",
@@ -101,6 +104,70 @@ class ClientSessionLike(Protocol):
 SessionFactory = Callable[
     [StdioServerParameters, TextIO], AbstractAsyncContextManager[ClientSessionLike]
 ]
+InstallationResolver = Callable[[str, str, RepositoryTarget], Awaitable[int]]
+
+
+async def discover_repository_installation(
+    app_id: str,
+    pem: str,
+    target: RepositoryTarget,
+    *,
+    http: httpx.AsyncClient | None = None,
+) -> int:
+    if http is None:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+            return await discover_repository_installation(app_id, pem, target, http=client)
+    try:
+        signed = sign_app_jwt(app_id, pem)
+    except (ValueError, TypeError, jwt.PyJWTError):
+        raise McpSetupError("publisher_private_key_invalid", retryable=False) from None
+    try:
+        response = await http.get(
+            f"https://api.github.com/repos/{target.owner}/{target.repo}/installation",
+            headers={
+                "Authorization": f"Bearer {signed}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=10,
+            follow_redirects=False,
+        )
+    except httpx.RequestError:
+        raise McpSetupError("installation_lookup_unavailable", retryable=True) from None
+    if response.status_code != 200:
+        if response.status_code == 404:
+            raise McpSetupError("repository_installation_not_found", retryable=False)
+        if (
+            response.status_code == 429
+            or response.status_code >= 500
+            or (
+                response.status_code == 403
+                and (
+                    response.headers.get("x-ratelimit-remaining") == "0"
+                    or "retry-after" in response.headers
+                )
+            )
+        ):
+            raise McpSetupError("installation_lookup_unavailable", retryable=True)
+        raise McpSetupError("installation_lookup_denied", retryable=False)
+    try:
+        body = response.json()
+    except ValueError:
+        raise McpSetupError("installation_lookup_invalid_response", retryable=False) from None
+    if not isinstance(body, dict):
+        raise McpSetupError("installation_lookup_invalid_response", retryable=False)
+    installation_id = body.get("id")
+    if (
+        type(installation_id) is not int
+        or installation_id <= 0
+        or type(body.get("app_id")) is not int
+        or str(body["app_id"]) != app_id
+        or "suspended_at" not in body
+    ):
+        raise McpSetupError("installation_lookup_invalid_response", retryable=False)
+    if body["suspended_at"] is not None:
+        raise McpSetupError("repository_installation_suspended", retryable=False)
+    return installation_id
 
 
 @asynccontextmanager
@@ -243,6 +310,7 @@ async def open_publisher_session(
     startup_timeout_seconds: float = 10.0,
     call_timeout_seconds: float = 10.0,
     private_root: Path | None = None,
+    installation_resolver: InstallationResolver = discover_repository_installation,
 ) -> AsyncIterator[PublisherSession]:
     """Launch, initialize and schema-check a fresh server; always remove the private dir.
 
@@ -256,6 +324,9 @@ async def open_publisher_session(
         raise McpSetupError("private_key_unavailable", retryable=True) from exc
     if not pem.lstrip().startswith("-----BEGIN"):
         raise McpSetupError("private_key_unavailable", retryable=False)
+    discovered_id = await installation_resolver(app_id, pem, target)
+    if discovered_id != installation_id:
+        raise McpSetupError("repository_installation_mismatch", retryable=False)
     private_dir, key_path = _prepare_private_dir(private_root, pem)
     del pem
     errlog = _open_devnull()
@@ -263,7 +334,7 @@ async def open_publisher_session(
         params = github_mcp_stdio_parameters(
             binary=binary,
             app_id=app_id,
-            installation_id=str(installation_id),
+            installation_id=str(discovered_id),
             private_key_path=key_path,
             workdir=private_dir,
         ).model_copy(update={"env": safe_child_environment(private_dir)})

@@ -58,7 +58,7 @@ jobs:
           TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          for setting in CLIENT_ID TENANT_ID SUBSCRIPTION_ID RESOURCE_GROUP ACR_NAME RECEIVER_APP WORKER_APP; do
+          for setting in RESOURCE_GROUP ACR_NAME RECEIVER_APP WORKER_APP; do
             value="$(printenv "$setting")"
             if [[ -z "$value" ]]; then
               echo "::error::Missing environment variable $setting"

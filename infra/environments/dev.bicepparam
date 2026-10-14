@@ -17,10 +17,7 @@ param webhookRole = 'ActionGroupsSecureWebhook'
 // Inference auth: 'pat' (default) uses a fine-grained user PAT stored in Key Vault.
 // Switch to 'app' and fill the inferenceApp* params to use a GitHub App installation token.
 param inferenceAuthMode = 'pat'
-param inferencePatSecretName = '<inference-pat-secret-name>'
-param inferenceAppId = ''
-param inferenceInstallationId = ''
-param inferenceKeySecretName = ''
+param inferencePatSecretName = 'githubcopilotpat'
 param publisherAppId = '5308134'
 param publisherBotLogin = 'GHCopilotSREAgent[bot]'
 param copilotModel = 'gpt-6-luna'
@@ -29,7 +26,7 @@ param copilotModel = 'gpt-6-luna'
 param diagnosticsWorkspaceName = ''
 
 // Existing Container Apps (same resource group) the worker may read. Empty grants nothing.
-param diagnosticContainerAppNames = []
+param diagnosticContainerAppNames = ['ca-demoapp1-v2ho77']
 
 param workerMinReplicas = 1
 param workerMaxReplicas = 3

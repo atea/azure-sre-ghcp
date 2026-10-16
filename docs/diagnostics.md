@@ -70,7 +70,8 @@ different Container Apps environments.
 
 ## Row projection
 
-The host baseline collects health, `container_app_console_errors`, then AI exceptions
+The host baseline collects health, `container_app_console_errors`, AI workspace linkage,
+then AI exceptions
 before opening the model session. The console error template groups DNS resolution failures,
 HTTP 5xx access logs and application error lines by error class and revision. Each group
 contains a count, first/last timestamp and one sample capped at 1000 characters. Results

@@ -27,6 +27,7 @@ class DiagnosticKind(StrEnum):
     CONTAINER_APP_HEALTH = "container_app_health"
     CONTAINER_APP_REVISIONS = "container_app_revisions"
     APP_INSIGHTS_EXCEPTIONS = "app_insights_exceptions"
+    APP_INSIGHTS_CONFIGURATION = "app_insights_configuration"
     APP_INSIGHTS_OPERATIONS = "app_insights_operations"
     CONTAINER_APP_CONSOLE_LOGS = "container_app_console_logs"
     CONTAINER_APP_CONSOLE_ERRORS = "container_app_console_errors"
@@ -116,14 +117,19 @@ def _operation_filter(ctx: QueryContext) -> str:
     return f"| where OperationId == '{ctx.operation_id}'"
 
 
-def _log_query_argv(ctx: QueryContext, kql: str) -> tuple[str, ...]:
+def _log_query_argv(ctx: QueryContext, kql: str, *, app_insights: bool = False) -> tuple[str, ...]:
     """``--flag=value`` form so a value can never be parsed as an option."""
+    workspace = (
+        ctx.mapping.app_insights_workspace_id
+        if app_insights and ctx.mapping.app_insights_workspace_id
+        else _workspace_guid(ctx.mapping)
+    )
     return (
         "az",
         "monitor",
         "log-analytics",
         "query",
-        f"--workspace={_workspace_guid(ctx.mapping)}",
+        f"--workspace={workspace}",
         f"--analytics-query={kql}",
         f"--timespan={iso_utc(ctx.window.start)}/{iso_utc(ctx.window.end)}",
         "--output=json",
@@ -166,7 +172,7 @@ def _exceptions_argv(ctx: QueryContext) -> tuple[str, ...]:
         "| project TimeGenerated, OperationId, ProblemId, ExceptionType, AppRoleName, OuterMessage "
         f"| take {ctx.row_limit + 1}"
     )
-    return _log_query_argv(ctx, kql)
+    return _log_query_argv(ctx, kql, app_insights=True)
 
 
 def _operations_argv(ctx: QueryContext) -> tuple[str, ...]:
@@ -186,7 +192,18 @@ def _operations_argv(ctx: QueryContext) -> tuple[str, ...]:
         "DurationMs, Target, Message, SeverityLevel "
         f"| take {ctx.row_limit + 1}"
     )
-    return _log_query_argv(ctx, kql)
+    return _log_query_argv(ctx, kql, app_insights=True)
+
+
+def _ai_configuration_argv(ctx: QueryContext) -> tuple[str, ...]:
+    return (
+        "az",
+        "resource",
+        "show",
+        f"--ids={_ai_component_id(ctx.mapping)}",
+        "--api-version=2020-02-02",
+        "--output=json",
+    )
 
 
 def _console_logs_argv(ctx: QueryContext) -> tuple[str, ...]:
@@ -256,6 +273,13 @@ def _activity_argv(ctx: QueryContext) -> tuple[str, ...]:
 
 
 TEMPLATES: Final[Mapping[DiagnosticKind, Template]] = {
+    DiagnosticKind.APP_INSIGHTS_CONFIGURATION: Template(
+        kind=DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
+        template_id="ai-configuration-v1",
+        fields=("properties.WorkspaceResourceId",),
+        supports_operation_id=False,
+        build_argv=_ai_configuration_argv,
+    ),
     DiagnosticKind.CONTAINER_APP_HEALTH: Template(
         kind=DiagnosticKind.CONTAINER_APP_HEALTH,
         template_id="aca-health-v1",

@@ -47,6 +47,7 @@ _TOOL_NAME: Final = "query_diagnostic"
 _BASELINE_KINDS: Final = (
     DiagnosticKind.CONTAINER_APP_HEALTH,
     DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+    DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
     DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
 )
 _OUTPUT_SCHEMA: Final[dict[str, Any]] = ModelReportDraft.model_json_schema()
@@ -109,6 +110,7 @@ class _RunContext:
     stopped: bool = False
     raw: str | None = None
     deferred: InvestigationDeferred | None = None
+    ai_link_verified: bool = False
 
     def mark(self, category: PartialCategory) -> None:
         if self.primary is None:
@@ -256,6 +258,13 @@ class CopilotInvestigator:
             if ctx.stopped:
                 return
             await self._collect(ctx, kind, None)
+            if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+                ctx.ai_link_verified = any(
+                    item.provenance.source.value == kind.value
+                    and item.status is EvidenceStatus.OK
+                    and not item.truncated
+                    for item in ctx.ledger.items
+                )
 
     def _tool_specs(self, ctx: _RunContext) -> list[ToolSpec]:
         async def handle(params: _QueryParams) -> ToolOutcome:
@@ -298,6 +307,17 @@ class CopilotInvestigator:
     async def _collect_locked(
         self, ctx: _RunContext, kind: DiagnosticKind, selector: CorrelationSelector | None
     ) -> ToolOutcome:
+        if (
+            kind
+            in (
+                DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+                DiagnosticKind.APP_INSIGHTS_OPERATIONS,
+            )
+            and not ctx.ai_link_verified
+        ):
+            return ToolOutcome(
+                "App Insights query blocked: workspace linkage has not been verified.", False
+            )
         try:
             ctx.calls.charge()
         except BudgetRefused:

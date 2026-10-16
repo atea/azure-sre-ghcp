@@ -145,6 +145,58 @@ def test_workspace_queries_bind_ai_component_and_workspace_guid() -> None:
         assert "--timespan=" in " ".join(argv)
 
 
+def test_separate_app_insights_workspace_routes_only_ai_queries() -> None:
+    ai_ws = "99999999-7777-8888-9999-aaaaaaaaaaaa"
+    reg = registry()
+    mapping = reg.applications[0].model_dump()
+    mapping.update(app_insights_workspace_id=ai_ws, app_insights_workspace_resource_id=LAW)
+    reg = c.ApplicationRegistry(
+        schema_version=1, tenant_id=TENANT, applications=[c.ApplicationMapping(**mapping)]
+    )
+    runner = FakeRunner()
+    coll = DiagnosticsCollector(registry=reg, runner=runner, env={}, clock=lambda: NOW)
+    for kind in (
+        DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+        DiagnosticKind.APP_INSIGHTS_OPERATIONS,
+        DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+    ):
+        coll.collect("shop", kind, WINDOW)
+    assert f"--workspace={ai_ws}" in argv_of(runner, 0)
+    assert f"--workspace={ai_ws}" in argv_of(runner, 1)
+    assert f"--workspace={WS}" in argv_of(runner, 2)
+
+
+@pytest.mark.parametrize("linked", [LAW.upper(), LAW + "-other", None])
+def test_ai_configuration_checks_linkage(linked: str | None) -> None:
+    runner = FakeRunner(ok({"properties": {"WorkspaceResourceId": linked}}))
+    item = collector(runner).collect("shop", DiagnosticKind.APP_INSIGHTS_CONFIGURATION, WINDOW)
+    assert f"--ids={AI.lower()}" in argv_of(runner)
+    if linked == LAW.upper():
+        assert item.status is EvidenceStatus.OK
+    else:
+        assert item.status is EvidenceStatus.ERROR
+        assert item.error and "linkage" in item.error.message
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"app_insights_workspace_id": WS},
+        {"app_insights_workspace_resource_id": LAW},
+        {"app_insights_workspace_id": "invalid", "app_insights_workspace_resource_id": LAW},
+        {
+            "app_insights_workspace_id": WS,
+            "app_insights_workspace_resource_id": LAW.replace(SUB, TENANT),
+        },
+    ],
+)
+def test_invalid_ai_workspace_mapping_is_rejected(overrides: dict[str, str]) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        c.ApplicationMapping.model_validate(registry().applications[0].model_dump() | overrides)
+
+
 def test_container_log_queries_bind_container_app_not_ai_component() -> None:
     runner = FakeRunner()
     coll = collector(runner)

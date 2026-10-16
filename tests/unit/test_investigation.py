@@ -220,12 +220,37 @@ def test_console_error_baseline_survives_sdk_failure(tmp_path: Path) -> None:
     assert [kind for _, kind, _ in coll.calls] == [
         DiagnosticKind.CONTAINER_APP_HEALTH,
         DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+        DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
         DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
     ]
     item = report.evidence.items[1]
     assert item.rows[0]["Occurrences"] == 3
     assert "Failed to resolve" in str(item.rows[0]["Log_s"])
     assert TOKEN not in report.model_dump_json()
+
+
+def test_mismatched_ai_linkage_blocks_ai_queries(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+            return make_item(rows=(), kind=kind, status=EvidenceStatus.ERROR)
+        return make_item(kind=kind)
+
+    async def script(tools: Sequence[ToolSpec], prompt: str) -> str:
+        outcome = await call_tool(tools, DiagnosticKind.APP_INSIGHTS_OPERATIONS)
+        assert not outcome.success
+        return draft_json()
+
+    coll = FakeCollector(evidence)
+    report = run(make_investigator(coll, FakeBackend(script), tmp_path), make_alert())
+    assert report.status == "partial"
+    assert all(
+        kind
+        not in (
+            DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+            DiagnosticKind.APP_INSIGHTS_OPERATIONS,
+        )
+        for _, kind, _ in coll.calls
+    )
 
 
 def test_temp_workspace_is_private_and_removed(tmp_path: Path) -> None:

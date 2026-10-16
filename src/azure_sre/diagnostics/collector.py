@@ -35,7 +35,12 @@ from azure_sre.diagnostics.templates import (
 from azure_sre.security.redaction import redact_value
 
 _OPERATION_ID_RE: Final = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
-_SINGLE_OBJECT_KINDS: Final = frozenset({DiagnosticKind.CONTAINER_APP_HEALTH})
+_SINGLE_OBJECT_KINDS: Final = frozenset(
+    {
+        DiagnosticKind.CONTAINER_APP_HEALTH,
+        DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
+    }
+)
 _PERMISSION_MARKERS: Final = (b"authorizationfailed", b"forbidden", b"does not have authorization")
 _MISSING_MARKERS: Final = (b"failed to resolve", b"could not be found", b"not found")
 _NOT_FOUND_MESSAGE: Final = "telemetry table or resource not found"
@@ -307,6 +312,23 @@ class DiagnosticsCollector:
                     "diagnostic output had an unrecognised schema",
                 )
             rows.append(redact_value(projected))
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION and rows:
+            expected = (
+                mapping.app_insights_workspace_resource_id
+                or mapping.log_analytics_workspace_resource_id
+            )
+            linked = rows[0].get("properties.WorkspaceResourceId")
+            if expected is None or not isinstance(linked, str) or linked.lower() != expected:
+                return self._failure(
+                    evidence_id,
+                    app_id,
+                    mapping,
+                    kind,
+                    window,
+                    EvidenceStatus.ERROR,
+                    "App Insights workspace linkage is missing or differs "
+                    "from the trusted registry",
+                )
         row_count = min(len(payload), limit)
         status = EvidenceStatus.OK if rows else EvidenceStatus.ZERO_ROWS
         summary = (

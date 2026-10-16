@@ -26,6 +26,8 @@
         "app_insights_component_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/REPLACE-RG/providers/Microsoft.Insights/components/REPLACE-APPI",
         "log_analytics_workspace_id": "00000000-0000-0000-0000-000000000000",
         "log_analytics_workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/REPLACE-RG/providers/Microsoft.OperationalInsights/workspaces/REPLACE-LAW",
+        "app_insights_workspace_id": "00000000-0000-0000-0000-000000000000",
+        "app_insights_workspace_resource_id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/REPLACE-RG/providers/Microsoft.OperationalInsights/workspaces/REPLACE-AI-LAW",
         "repository": "REPLACE-ORG/REPLACE-REPO",
         "installation_id": 1
       }

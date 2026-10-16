@@ -473,7 +473,11 @@ def test_unknown_evidence_ref_is_salvaged_as_unverified_hypothesis(tmp_path: Pat
         ("Made up finding.", "unverified")
     ]
     codes = [n.code for n in report.validation_notes]
-    assert codes == [c.ValidationNoteCode.REFS_REMOVED, c.ValidationNoteCode.DOWNGRADED]
+    assert codes == [
+        c.ValidationNoteCode.REFS_REMOVED,
+        c.ValidationNoteCode.DOWNGRADED,
+        c.ValidationNoteCode.REPAIR_ATTEMPTED,
+    ]
     assert "Made up" not in " ".join(n.detail for n in report.validation_notes)
 
 
@@ -485,7 +489,10 @@ def test_unsalvageable_model_output_is_rejected_with_reason(tmp_path: Path) -> N
     )
     assert report.draft is None
     assert report.partial_category is PartialCategory.INVALID_REPORT
-    assert {n.code for n in report.validation_notes} == {c.ValidationNoteCode.SCHEMA_VIOLATION}
+    assert {n.code for n in report.validation_notes} == {
+        c.ValidationNoteCode.SCHEMA_VIOLATION,
+        c.ValidationNoteCode.REPAIR_ATTEMPTED,
+    }
 
 
 def test_secret_in_salvaged_text_is_redacted(tmp_path: Path) -> None:
@@ -518,7 +525,7 @@ def test_rejected_model_output_records_reason_codes(
     )
     assert report.draft is None
     assert report.partial_category is PartialCategory.INVALID_REPORT
-    assert report.validation_notes and {n.code.value for n in report.validation_notes} == {code}
+    assert {n.code.value for n in report.validation_notes} == {code, "repair_attempted"}
     assert f"model output rejected: reason={code}" in caplog.text
     assert reply not in caplog.text
 
@@ -904,3 +911,65 @@ def test_model_gap_alone_makes_report_partial(tmp_path: Path) -> None:
     )
     assert report.status == "partial"
     assert report.partial_category is PartialCategory.EVIDENCE_MISSING
+
+
+REPAIR_MARK = "could not accept your previous reply"
+BAD_CAUSE = {
+    "statement": "UniqueModelClaim storage is down.",
+    "support_refs": ["E9"],
+    "contradiction_refs": [],
+    "verdict": "supported",
+}
+GOOD_CAUSE = {**BAD_CAUSE, "support_refs": ["E1"]}
+
+
+def test_repair_turn_replaces_lossy_reply_with_corrected_one(tmp_path: Path) -> None:
+    def script(tools: Any, prompt: str) -> str:
+        cause = GOOD_CAUSE if REPAIR_MARK in prompt else BAD_CAUSE
+        return draft_json(hypotheses=[cause])
+
+    backend = FakeBackend(script)
+    report = run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    assert len(backend.prompts) == 2
+    repair = backend.prompts[1]
+    assert "UniqueModelClaim" not in repair
+    assert "hypotheses[0]" in repair and "E1" in repair
+    assert report.draft is not None
+    assert report.draft.hypotheses[0].verdict == "supported"
+    assert report.conclusion == "conclusive"
+    assert [(n.code.value, n.detail) for n in report.validation_notes] == [
+        ("repair_attempted", "repair turn accepted: the corrected reply replaced the original")
+    ]
+
+
+def test_valid_reply_skips_repair_turn(tmp_path: Path) -> None:
+    backend = FakeBackend(lambda t, p: draft_json())
+    run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    assert len(backend.prompts) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("boom"), InvestigationDeferred("rate_limited", reason="model_rate_limited")],
+)
+def test_failed_repair_turn_keeps_salvaged_original(tmp_path: Path, failure: Exception) -> None:
+    def script(tools: Any, prompt: str) -> str:
+        if REPAIR_MARK in prompt:
+            raise failure
+        return draft_json(hypotheses=[BAD_CAUSE])
+
+    report = run(make_investigator(FakeCollector(), FakeBackend(script), tmp_path), make_alert())
+    assert report.draft is not None
+    assert report.draft.hypotheses[0].verdict == "unverified"
+    assert report.partial_category is not PartialCategory.SDK_ERROR
+    assert report.validation_notes[-1].detail == "repair turn failed; kept the original reply"
+
+
+def test_worse_repair_reply_is_ignored(tmp_path: Path) -> None:
+    def script(tools: Any, prompt: str) -> str:
+        return "garbage" if REPAIR_MARK in prompt else draft_json(hypotheses=[BAD_CAUSE])
+
+    report = run(make_investigator(FakeCollector(), FakeBackend(script), tmp_path), make_alert())
+    assert report.draft is not None
+    assert report.draft.hypotheses[0].statement == BAD_CAUSE["statement"]
+    assert "did not improve" in report.validation_notes[-1].detail

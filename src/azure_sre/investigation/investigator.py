@@ -42,7 +42,7 @@ from azure_sre.diagnostics.templates import DiagnosticKind
 from azure_sre.investigation.backend import ModelBackend, ModelSession, ToolOutcome, ToolSpec
 from azure_sre.investigation.budget import BudgetRefused, CallLedger, EvidenceLedger
 from azure_sre.investigation.findings import derive_host_findings
-from azure_sre.investigation.prompt import build_prompt
+from azure_sre.investigation.prompt import build_prompt, build_repair_prompt
 from azure_sre.investigation.salvage import salvage_draft
 from azure_sre.security.redaction import redact_text, redact_value
 from azure_sre.worker.messages import PoisonMessage, bind_alert
@@ -50,6 +50,8 @@ from azure_sre.worker.protocols import InvestigationDeferred
 
 logger = logging.getLogger(__name__)
 
+_MIN_REPAIR_SECONDS: Final = 15.0
+_REPAIR_MARGIN_SECONDS: Final = 5.0
 _SALVAGEABLE: Final = frozenset(
     {ValidationNoteCode.SCHEMA_VIOLATION, ValidationNoteCode.EVIDENCE_REFERENCE}
 )
@@ -163,6 +165,7 @@ class _RunContext:
     ai_link_verified: bool = False
     model_stage: str = "start"
     notes: list[ValidationNote] = field(default_factory=list)
+    repair_notes: list[Note] = field(default_factory=list)
 
     def note(self, code: ValidationNoteCode, detail: str) -> None:
         if len(self.notes) < MAX_VALIDATION_NOTES:
@@ -196,6 +199,76 @@ async def _settle(futures: set[asyncio.Future[Any]]) -> None:
             cancelled = exc
     if cancelled is not None:
         raise cancelled
+
+
+Note = tuple[ValidationNoteCode, str]
+
+# Alterations that lose model content; a repair turn is attempted when any occurs.
+_LOSSY: Final = frozenset(
+    {
+        ValidationNoteCode.ITEM_DROPPED,
+        ValidationNoteCode.REFS_REMOVED,
+        ValidationNoteCode.DOWNGRADED,
+        ValidationNoteCode.SUMMARY_REPLACED,
+    }
+)
+
+
+@dataclass(frozen=True)
+class DraftEvaluation:
+    """Outcome of validating one model reply; ``notes`` are host-written."""
+
+    draft: ModelReportDraft | None
+    notes: tuple[Note, ...] = ()
+    # Why strict validation failed, or None when the reply was valid as sent.
+    reason: ValidationNoteCode | None = None
+    problems: int = 0
+    size: int = 0
+
+    @property
+    def lossy(self) -> int:
+        """Lower is better: a rejected reply scores worst, then by lossy alterations."""
+        if self.draft is None:
+            return 1_000_000
+        return sum(1 for code, _ in self.notes if code in _LOSSY)
+
+
+def evaluate_model_output(raw: str | None, bundle: EvidenceBundle) -> DraftEvaluation:
+    """Strictly validate a reply, salvaging it when only schema or reference checks fail."""
+    size = len(raw.encode("utf-8")) if raw is not None else 0
+
+    def reject(code: ValidationNoteCode, problems: tuple[str, ...]) -> DraftEvaluation:
+        notes = tuple((code, problem) for problem in problems)
+        return DraftEvaluation(None, notes, code, len(problems), size)
+
+    if raw is None:
+        return reject(ValidationNoteCode.NO_RESPONSE, ("the model returned no final reply",))
+    if size > MAX_MODEL_OUTPUT_BYTES:
+        return reject(ValidationNoteCode.OVERSIZED, ("model output exceeds size limit",))
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return reject(ValidationNoteCode.INVALID_JSON, ("model output is not valid JSON",))
+    if not isinstance(parsed, Mapping):
+        return reject(ValidationNoteCode.NOT_OBJECT, ("model output must be a JSON object",))
+    # Status is host-owned: validate the reply as a draft and decide status in _report.
+    document = {key: value for key, value in parsed.items() if key not in _HOST_OWNED_FIELDS}
+    document["status"] = "partial"
+    redacted = dict(redact_value(document))
+    try:
+        return DraftEvaluation(validate_model_output(redacted, bundle), size=size)
+    except ReportValidationError as exc:
+        try:
+            code = ValidationNoteCode(exc.reason)
+        except ValueError:
+            code = ValidationNoteCode.SCHEMA_VIOLATION
+        if code in _SALVAGEABLE:
+            draft, notes = salvage_draft(redacted, bundle)
+            if draft is not None:
+                return DraftEvaluation(draft, tuple(notes), code, len(exc.problems), size)
+        return reject(code, exc.problems)
+    except ValueError:
+        return reject(ValidationNoteCode.SCHEMA_VIOLATION, ("model output failed validation",))
 
 
 class CopilotInvestigator:
@@ -280,6 +353,7 @@ class CopilotInvestigator:
                         prompt = build_prompt(ctx.alert, bundle)
                         ctx.model_stage = "model_turn"
                         ctx.raw = await session.send(prompt, _OUTPUT_SCHEMA, ctx.remaining())
+                        await self._repair(ctx, session)
         except TimeoutError:
             ctx.mark(PartialCategory.TIMEOUT)
         except InvestigationDeferred as exc:
@@ -305,6 +379,43 @@ class CopilotInvestigator:
             finally:
                 # Runs even if close was cancelled or raised: no worker thread may outlive the run.
                 await _settle(set(ctx.inflight))
+
+    async def _repair(self, ctx: _RunContext, session: ModelSession) -> None:
+        """Give the model one chance to fix a rejected or lossy reply, with host feedback.
+
+        The repaired reply replaces the original only when it loses less content. Any failure
+        here (including rate limiting or timeout) keeps the original reply.
+        """
+        bundle = EvidenceBundle(incident_key=ctx.alert.incident_key, items=ctx.ledger.items)
+        first = evaluate_model_output(ctx.raw, bundle)
+        if first.lossy == 0 or first.reason is ValidationNoteCode.NO_RESPONSE:
+            return
+        seconds = ctx.remaining() - _REPAIR_MARGIN_SECONDS
+        if seconds < _MIN_REPAIR_SECONDS:
+            ctx.repair_notes.append(
+                (ValidationNoteCode.REPAIR_ATTEMPTED, "repair turn skipped: not enough time left")
+            )
+            return
+        ctx.model_stage = "repair_turn"
+        outcome = "repair turn did not improve the reply; kept the original"
+        try:
+            async with asyncio.timeout(seconds):
+                raw = await session.send(
+                    build_repair_prompt(first.notes, bundle), _OUTPUT_SCHEMA, seconds
+                )
+        except TimeoutError:
+            outcome = "repair turn timed out; kept the original reply"
+        except Exception as exc:  # noqa: BLE001 - the original reply is still usable
+            logger.warning("model repair turn failed: type=%s", type(exc).__name__)
+            outcome = "repair turn failed; kept the original reply"
+        else:
+            second = evaluate_model_output(raw, bundle)
+            if second.lossy < first.lossy:
+                ctx.raw = raw
+                outcome = "repair turn accepted: the corrected reply replaced the original"
+        ctx.model_stage = "model_turn"
+        logger.info("model repair turn: %s", outcome)
+        ctx.repair_notes.append((ValidationNoteCode.REPAIR_ATTEMPTED, outcome))
 
     async def _close(self, ctx: _RunContext, session: ModelSession | None) -> None:
         if session is None:
@@ -460,65 +571,31 @@ class CopilotInvestigator:
         return None
 
     def _draft(self, ctx: _RunContext, bundle: EvidenceBundle) -> ModelReportDraft | None:
-        """Validate untrusted model output against the schema and the final evidence bundle."""
-        raw = ctx.raw
-        size = len(raw.encode("utf-8")) if raw is not None else 0
-
-        def reject(code: ValidationNoteCode, problems: tuple[str, ...]) -> None:
+        """Validate untrusted model output against the final bundle and record the outcome."""
+        result = evaluate_model_output(ctx.raw, bundle)
+        for code, detail in result.notes:
+            ctx.note(code, detail)
+        incident = ctx.alert.incident_key[:12]
+        if result.draft is None:
             ctx.mark(PartialCategory.INVALID_REPORT)
-            for problem in problems:
-                ctx.note(code, problem)
             logger.warning(
                 "model output rejected: reason=%s problems=%d bytes=%d incident=%s",
-                code.value,
-                len(problems),
-                size,
-                ctx.alert.incident_key[:12],
+                result.reason.value if result.reason else "unknown",
+                result.problems,
+                result.size,
+                incident,
             )
-
-        if raw is None:
-            reject(ValidationNoteCode.NO_RESPONSE, ("the model returned no final reply",))
-            return None
-        if size > MAX_MODEL_OUTPUT_BYTES:
-            reject(ValidationNoteCode.OVERSIZED, ("model output exceeds size limit",))
-            return None
-        try:
-            parsed = json.loads(raw)
-        except ValueError:
-            reject(ValidationNoteCode.INVALID_JSON, ("model output is not valid JSON",))
-            return None
-        if not isinstance(parsed, Mapping):
-            reject(ValidationNoteCode.NOT_OBJECT, ("model output must be a JSON object",))
-            return None
-        # Status is host-owned: validate the reply as a draft and decide status in _report.
-        document = {key: value for key, value in parsed.items() if key not in _HOST_OWNED_FIELDS}
-        document["status"] = "partial"
-        redacted = dict(redact_value(document))
-        try:
-            return validate_model_output(redacted, bundle)
-        except ReportValidationError as exc:
-            try:
-                code = ValidationNoteCode(exc.reason)
-            except ValueError:
-                code = ValidationNoteCode.SCHEMA_VIOLATION
-            if code in _SALVAGEABLE:
-                draft, notes = salvage_draft(redacted, bundle)
-                if draft is not None:
-                    for note_code, detail in notes:
-                        ctx.note(note_code, detail)
-                    logger.warning(
-                        "model output salvaged: reason=%s problems=%d changes=%d incident=%s",
-                        code.value,
-                        len(exc.problems),
-                        len(notes),
-                        ctx.alert.incident_key[:12],
-                    )
-                    return draft
-            reject(code, exc.problems)
-            return None
-        except ValueError:
-            reject(ValidationNoteCode.SCHEMA_VIOLATION, ("model output failed validation",))
-            return None
+        elif result.reason is not None:
+            logger.warning(
+                "model output salvaged: reason=%s problems=%d changes=%d incident=%s",
+                result.reason.value,
+                result.problems,
+                len(result.notes),
+                incident,
+            )
+        for code, detail in ctx.repair_notes:
+            ctx.note(code, detail)
+        return result.draft
 
     def _report(self, ctx: _RunContext) -> InvestigationReport:
         bundle = EvidenceBundle(incident_key=ctx.alert.incident_key, items=ctx.ledger.items)

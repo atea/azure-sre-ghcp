@@ -1185,6 +1185,7 @@ class ValidationNoteCode(StrEnum):
     TRUNCATED = "truncated"
     SUMMARY_REPLACED = "summary_replaced"
     FIELD_IGNORED = "field_ignored"
+    REPAIR_ATTEMPTED = "repair_attempted"
 
 
 MAX_VALIDATION_NOTES: Final = 20

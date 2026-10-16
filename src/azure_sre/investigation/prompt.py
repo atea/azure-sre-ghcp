@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 
-from azure_sre.contracts import EvidenceBundle, NormalizedAlert
+from azure_sre.contracts import EvidenceBundle, EvidenceStatus, NormalizedAlert, ValidationNoteCode
 from azure_sre.diagnostics.templates import DiagnosticKind
 from azure_sre.investigation.findings import derive_host_findings
 from azure_sre.security.redaction import redact_text
 
 _ALERT_RULE_CHARS = 200
+_REPAIR_NOTES = 20
 _ESCAPES = {"<": "\\u003c", ">": "\\u003e", "&": "\\u0026"}
 
 
@@ -53,6 +55,28 @@ def build_prompt(alert: NormalizedAlert, baseline: EvidenceBundle) -> str:
         "<untrusted_data>\n"
         f"{_escape(json.dumps(untrusted, sort_keys=True, ensure_ascii=True))}\n"
         "</untrusted_data>\n"
+    )
+
+
+def build_repair_prompt(
+    notes: Sequence[tuple[ValidationNoteCode, str]], bundle: EvidenceBundle
+) -> str:
+    """Host-written feedback for one repair turn; notes never contain model text."""
+    ok = [item.evidence_id for item in bundle.items if item.status is EvidenceStatus.OK]
+    failed = [item.evidence_id for item in bundle.items if item.status is not EvidenceStatus.OK]
+    problems = [
+        {"code": code.value, "detail": redact_text(detail)}
+        for code, detail in notes[:_REPAIR_NOTES]
+    ]
+    return (
+        "The host could not accept your previous reply as written. Problems found:\n"
+        f"{_escape(json.dumps(problems, ensure_ascii=True))}\n"
+        f"Evidence with status ok (may support symptoms, observations, chronology and "
+        f"supported hypotheses): {', '.join(ok) or 'none'}.\n"
+        f"Evidence that failed or is unavailable (cite only in gaps, developer actions or "
+        f"unverified hypotheses): {', '.join(failed) or 'none'}.\n"
+        "Reply again with the complete corrected report as JSON matching the schema. Keep "
+        "your diagnosis; fix only the problems listed. Do not call more tools unless needed.\n"
     )
 
 

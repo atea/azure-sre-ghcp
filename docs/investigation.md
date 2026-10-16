@@ -76,6 +76,15 @@ SdkModelBackend(
    `truncated`, `summary_replaced`, or `field_ignored`. The worker logs
    `model output salvaged: ...`. Only output with nothing salvageable is rejected as
    `INVALID_REPORT`.
+
+   **Repair turn.** If the first reply was rejected or salvage lost content (`item_dropped`,
+   `refs_removed`, `downgraded`, `summary_replaced`), the host sends one follow-up on the
+   same session (`stage=repair_turn`). The follow-up lists the host-written notes and the
+   OK and failed evidence ids; it never echoes model text. It runs only with at least 15 s
+   left and finishes 5 s before the deadline. The corrected reply replaces the original only
+   when it loses less content. A failure, timeout, or rate limit during repair keeps the
+   original reply and never defers the incident. A `repair_attempted` note records the
+   outcome. Repair tool calls share the same budget.
 8. The host derives `host_findings` from OK evidence only, with no model involvement
    (`investigation/findings.py`). The codes are:
    - `storage_account_registry_mismatch`: the configured storage account differs from the

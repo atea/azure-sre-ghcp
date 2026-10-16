@@ -24,6 +24,7 @@ from tests.unit.test_worker_support import complete_report, make_alert
 KIB24 = 24 * 1024
 SECTIONS = (
     "## Summary",
+    "## Host-verified findings",
     "## Alert",
     "## Symptoms",
     "## Timeline",

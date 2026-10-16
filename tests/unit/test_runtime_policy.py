@@ -117,3 +117,43 @@ def test_github_mcp_parameters_keep_key_out_of_env(tmp_path: Path) -> None:
     assert params.env == {}
     assert f"--tools={','.join(mcp_policy.PUBLISHER_TOOLS)}" in params.args
     assert not any("PRIVATE_KEY" in a for a in params.args)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "github.com",
+        "api.github.com",
+        "https://github.com",
+        "https://api.github.com",
+        "https://github.com/",
+        "https://GitHub.com",
+    ],
+)
+def test_token_host_accepts_bare_hosts_and_sdk_https_origins(host: str) -> None:
+    assert sdk_policy.is_approved_token_host(host)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "",
+        None,
+        " github.com",
+        "evil.example",
+        "github.com.evil.example",
+        "http://github.com",
+        "https://evil.example",
+        "https://github.com.evil.example",
+        "https://user@github.com",
+        "https://github.com:443",
+        "https://github.com:8443",
+        "https://github.com/path",
+        "https://github.com?x=1",
+        "https://github.com#f",
+        "https://[::1]",
+        "ftp://github.com",
+    ],
+)
+def test_token_host_rejects_other_hosts_and_decorated_origins(host: object) -> None:
+    assert not sdk_policy.is_approved_token_host(host)

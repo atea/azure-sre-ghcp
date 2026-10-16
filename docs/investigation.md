@@ -32,12 +32,52 @@ SdkModelBackend(
 ## Flow
 
 1. Validate the alert against the registry: app id, all seven resource fields, and the fingerprint.
-2. Run baseline host diagnostics (`_BASELINE_KINDS`) before the model is invoked.
+2. Run baseline host diagnostics (`_BASELINE_KINDS`) before the model is invoked. The prompt
+   carries the baseline evidence and its derived `host_findings`, both inside
+   `<untrusted_data>`. Its rules tell the model to correlate error rows with configuration
+   facts and findings. A DNS failure for a configured dependency is recorded as a supported
+   hypothesis when it explains the symptoms, and unrelated gaps (such as App Insights
+   linkage) do not downgrade it. The host still decides the final report status.
 3. Open an isolated SDK client and session in a private workspace. Tokens come only from the injected host supplier.
 4. The model may call one typed tool, `kind` plus a bounded `operation_id`. Scope, app, and time window are fixed by the host. Extra fields are rejected.
 5. Every tool call, including baseline and refused calls, counts against the shared budget: 12 calls, 5 minutes overall, 30 s per CLI call, 100 rows per query, 64 KiB of evidence.
 6. Model output must be JSON matching `ModelReportDraft`. It is redacted and then validated against the evidence refs.
 7. Failures become partial reports with a category: `TIMEOUT`, `SDK_ERROR`, `INVALID_REPORT`, `BUDGET_EXHAUSTED`, `EVIDENCE_MISSING`, or `PERMISSION_DENIED`.
+   An `SDK_ERROR` also records a host gap `model session failed during <stage>: <reason>`.
+   `stage` is `session_open` or `model_turn`. `reason` is a fixed code:
+   `authentication`, `response_schema`, `model_unavailable`, `model_request_rejected`,
+   `runtime_unavailable`, or `unclassified`. The code is derived from the exception type and
+   message, but the message itself is never stored or logged.
+8. The host derives `host_findings` from OK evidence only, with no model involvement
+   (`investigation/findings.py`). The codes are:
+   - `storage_account_registry_mismatch`: the configured storage account differs from the
+     registered `storage_account_id`.
+   - `storage_account_dns_failure`: a DNS failure for
+     `<configured account>.<blob|table|queue|file|dfs>.core.windows.net`.
+   - `dependency_dns_failure`: up to 3 other hosts that failed DNS resolution.
+   - `http_5xx_with_dependency_failure`: a revision logged 5xx responses alongside DNS
+     failures.
+   Values must match strict patterns before they reach finding text. Findings are kept even
+   when the model session fails, so a partial report can still name the likely cause.
+   `InvestigationReport` rejects findings that cite missing or non-OK evidence.
+9. `conclusion` is independent of `status`. A report is `conclusive` when the draft has a
+   `supported` hypothesis (whose refs are already validated as OK evidence) or when a
+   conclusive finding (`storage_account_dns_failure`, `storage_account_registry_mismatch`)
+   exists. A partial report can therefore name a likely cause while still listing
+   unrelated gaps. The report validator rejects `conclusive` without such a basis. Stored
+   reports without the field load as `inconclusive`.
+
+### SDK contract notes
+
+- The token callback receives the host as an HTTPS origin (`https://github.com`).
+  `sdk_policy.is_approved_token_host` accepts only that origin or the bare approved host.
+- `expiresIn` must be the token's real remaining lifetime and must exceed 3600 seconds.
+  PAT mode reports 8 hours. GitHub App installation tokens live at most one hour, so `app`
+  inference mode cannot satisfy this SDK version's preflight check.
+- Structured output is strict: `_OUTPUT_SCHEMA` lists every property as required and has no
+  `default` keywords. Replies are still validated against `ModelReportDraft`.
+- The `smoke live` gate passes the token directly to the client, not through the session
+  token provider, so it does not exercise these callback rules.
 
 ## Cancellation
 

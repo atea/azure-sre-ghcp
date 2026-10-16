@@ -57,7 +57,11 @@ async def test_installation_token_is_cached_and_forced_refresh_reloads_key(
         assert "ghs_test" not in repr(first)
         await provider.get_token(force_refresh=True)
         result = await provider.for_sdk(
-            {"host": "github.com", "session_id": "s", "reason": GitHubTokenAcquireReason.REFRESH}
+            {
+                "host": "https://github.com",
+                "session_id": "s",
+                "reason": GitHubTokenAcquireReason.REFRESH,
+            }
         )
         assert result["kind"] == "token"
         assert result["expiresIn"] > 0

@@ -109,8 +109,11 @@ Each operation starts a fresh server process:
 The body has a fixed host layout:
 
 - Line 1 is exactly `<!-- azure-sre:incident:<sha256> -->`.
-- A WARNING banner follows when the report is partial.
-- Then the sections, in order: **Summary**, **Alert** (trusted identity, severity,
+- A banner follows when the report is partial. A conclusive partial report gets an
+  IMPORTANT banner, "Likely cause identified; some evidence was unavailable". Otherwise a
+  WARNING banner says the findings may be incomplete.
+- Then the sections, in order: **Summary**, **Host-verified findings** (deterministic
+  findings with evidence ids), **Alert** (trusted identity, severity,
   signal, fired time, window, rule, alert id, incident key), **Symptoms**, **Timeline**,
   **Observations**, **Hypotheses** (supported / contradicted / unverified, with evidence
   ids), **Gaps**, **Evidence provenance**, **Developer actions** (checkboxes), and a
@@ -137,7 +140,10 @@ hard cap).
   `_N more item(s) omitted to fit the <N>-byte size limit._` notice.
 - `RenderError` gives `render_failed` (ABSENT, non-retryable).
 
-The title is `[partial] [SevN] app (env): summary`. It is at most 256 characters,
+The title is `[prefix] [SevN] app (env): summary`. The prefix is empty for complete
+reports, `[likely cause]` for conclusive partial reports, and `[partial]` otherwise.
+Without a model draft, the summary is the first conclusive host finding, then any host
+finding, then `investigation incomplete`. The title is at most 256 characters,
 redacted, single-line, with angle brackets neutralized.
 
 The recovery comment has marker `azure-sre:recovery:<sha256>` and states that the issue

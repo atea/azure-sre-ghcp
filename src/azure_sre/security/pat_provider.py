@@ -10,10 +10,17 @@ from copilot import GitHubTokenProviderArgs, GitHubTokenProviderResult
 from copilot.generated.rpc import GitHubTokenAcquireReason
 from pydantic import SecretStr
 
-from azure_sre.runtime.sdk_policy import PolicyError, validate_inference_token
+from azure_sre.runtime.sdk_policy import (
+    PolicyError,
+    is_approved_token_host,
+    validate_inference_token,
+)
 
-_APPROVED_HOSTS = frozenset({"github.com", "api.github.com"})
 DEFAULT_CACHE_SECONDS = 900
+# Lifetime reported to the SDK. The runtime rejects tokens with one hour or less remaining
+# and refreshes one hour before this value; fine-grained PATs last days, so the vault cache
+# TTL above (our re-read cadence) must not be reported as the token's lifetime.
+SDK_REPORTED_LIFETIME_SECONDS = 8 * 3600
 
 
 class PatAuthenticationError(RuntimeError):
@@ -64,14 +71,13 @@ class PatTokenProvider:
             return self._cached
 
     async def for_sdk(self, args: GitHubTokenProviderArgs) -> GitHubTokenProviderResult:
-        if args["host"] not in _APPROVED_HOSTS:
+        if not is_approved_token_host(args["host"]):
             raise PatAuthenticationError("SDK requested credentials for an unapproved GitHub host.")
         token = await self.get_token(
             force_refresh=args.get("reason") == GitHubTokenAcquireReason.REFRESH
         )
-        remaining = max(1, int(self._cache_seconds - (self._clock() - self._loaded_at)))
         return {
             "kind": "token",
             "accessToken": token.get_secret_value(),
-            "expiresIn": remaining,
+            "expiresIn": SDK_REPORTED_LIFETIME_SECONDS,
         }

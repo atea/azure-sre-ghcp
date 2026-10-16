@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from azure_sre.contracts import (
+    CONCLUSIVE_HOST_FINDING_CODES,
     EvidenceItem,
     InvestigationReport,
     NormalizedAlert,
@@ -116,8 +117,10 @@ def _refs(refs: Sequence[str], label: str = "evidence") -> str:
 
 
 def render_issue_title(alert: NormalizedAlert, report: InvestigationReport) -> str:
-    summary = report.draft.summary if report.draft is not None else "investigation incomplete"
-    prefix = "[partial] " if report.status == "partial" else ""
+    summary = report.draft.summary if report.draft is not None else _finding_headline(report)
+    prefix = ""
+    if report.status == "partial":
+        prefix = "[likely cause] " if report.conclusion == "conclusive" else "[partial] "
     head = f"{prefix}[{alert.severity.value}] {alert.app_id} ({alert.environment}): "
     # Titles are not rendered as HTML, but angle brackets are still neutralized so an
     # untrusted summary can never carry a lookalike of the host marker comment.
@@ -126,6 +129,12 @@ def render_issue_title(alert: NormalizedAlert, report: InvestigationReport) -> s
     if len(title) > MAX_TITLE_CHARS:
         title = title[: MAX_TITLE_CHARS - 1].rstrip() + _ELLIPSIS
     return title
+
+
+def _finding_headline(report: InvestigationReport) -> str:
+    strong = [f for f in report.host_findings if f.code in CONCLUSIVE_HOST_FINDING_CODES]
+    findings = strong or list(report.host_findings)
+    return findings[0].text if findings else "investigation incomplete"
 
 
 @dataclass
@@ -222,7 +231,15 @@ def render_issue_body(
     )
 
     banner: list[str] = []
-    if report.status == "partial":
+    if report.status == "partial" and report.conclusion == "conclusive":
+        category = report.partial_category.value if report.partial_category else "unknown"
+        banner = [
+            "> [!IMPORTANT]",
+            f"> Likely cause identified; some evidence was unavailable (`{category}`). "
+            "See **Host-verified findings**, **Hypotheses** and **Gaps**.",
+            "",
+        ]
+    elif report.status == "partial":
         category = report.partial_category.value if report.partial_category else "unknown"
         banner = [
             "> [!WARNING]",
@@ -243,6 +260,11 @@ def render_issue_body(
     ]
     if draft is not None:
         summaries = [escape_inline(draft.summary, n) for n in (1000, 280, 80)]
+    elif report.host_findings:
+        summaries = [
+            "_No model diagnosis was produced; see the host-verified findings below. "
+            "This is a host-generated partial report._"
+        ]
     else:
         summaries = ["_No diagnosis was produced; this is a host-generated partial report._"]
 
@@ -255,6 +277,11 @@ def render_issue_body(
         )
 
     sections = {
+        "findings": _Section(
+            "Host-verified findings",
+            [f"- {escape_inline(f.text)}{_refs(f.evidence_refs)}" for f in report.host_findings],
+            "_No deterministic findings._",
+        ),
         "symptoms": _Section(
             "Symptoms",
             [
@@ -318,6 +345,7 @@ def render_issue_body(
 
     def compose() -> str:
         lines = [marker_line, "", *banner, "## Summary", "", summaries[state["summary"]], ""]
+        lines += sections["findings"].render(budget_label)
         lines += alert_lines
         order = ("symptoms", "timeline", "observations", "hypotheses")
         for key in order:
@@ -342,6 +370,7 @@ def render_issue_body(
 
     # Optional items in priority order; each section keeps its leading items.
     for key in (
+        "findings",
         "samples",
         "hypotheses",
         "observations",

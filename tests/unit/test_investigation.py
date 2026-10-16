@@ -24,7 +24,13 @@ from azure_sre.investigation import (
     ToolOutcome,
     ToolSpec,
 )
-from azure_sre.investigation.investigator import AlertRejected, CopilotInvestigator, _QueryParams
+from azure_sre.investigation.investigator import (
+    _OUTPUT_SCHEMA,
+    AlertRejected,
+    CopilotInvestigator,
+    _QueryParams,
+    classify_sdk_failure,
+)
 from azure_sre.investigation.prompt import build_prompt
 from azure_sre.runtime.sdk_policy import build_runtime_env
 from azure_sre.worker.protocols import InvestigationDeferred
@@ -484,6 +490,54 @@ def test_session_error_is_sdk_partial(tmp_path: Path) -> None:
     assert report.partial_category is PartialCategory.SDK_ERROR
 
 
+def _sdk_gaps(report: c.InvestigationReport) -> list[str]:
+    return [g.description for g in report.host_gaps if g.category is PartialCategory.SDK_ERROR]
+
+
+def test_model_turn_failure_records_categorized_reason_without_exception_text(
+    tmp_path: Path,
+) -> None:
+    def fail(tools: Sequence[ToolSpec], prompt: str) -> str:
+        raise RuntimeError(
+            f"Session error: Execution failed: 400 Invalid schema for response_format {TOKEN}"
+        )
+
+    report = run(make_investigator(FakeCollector(), FakeBackend(fail), tmp_path), make_alert())
+    assert _sdk_gaps(report) == ["model session failed during model_turn: response_schema"]
+    assert TOKEN not in report.model_dump_json()
+    assert "Invalid schema" not in report.model_dump_json()
+
+
+def test_session_open_failure_records_stage_and_authentication_reason(tmp_path: Path) -> None:
+    class FailingOpen(FakeBackend):
+        async def open(self, tools: Sequence[ToolSpec], root: Path) -> FakeSession:
+            raise RuntimeError(
+                "Request session.create failed: GitHub token provider callback failed"
+            )
+
+    backend = FailingOpen(lambda t, p: draft_json())
+    report = run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    assert report.partial_category is PartialCategory.SDK_ERROR
+    assert _sdk_gaps(report) == ["model session failed during session_open: authentication"]
+
+
+@pytest.mark.parametrize(
+    ("exc", "reason"),
+    [
+        (PermissionError("x"), "authentication"),
+        (RuntimeError("returned a credential with 899 seconds remaining"), "authentication"),
+        (RuntimeError("HTTP 401 Unauthorized"), "authentication"),
+        (RuntimeError("Invalid schema for response_format 'response'"), "response_schema"),
+        (RuntimeError("unknown model 'gpt-x'"), "model_unavailable"),
+        (RuntimeError("Execution failed: 400"), "model_request_rejected"),
+        (ConnectionResetError("reset"), "runtime_unavailable"),
+        (RuntimeError("something else"), "unclassified"),
+    ],
+)
+def test_sdk_failure_classification(exc: BaseException, reason: str) -> None:
+    assert classify_sdk_failure(exc) == reason
+
+
 def test_cleanup_error_is_explicit_gap_not_swallowed(tmp_path: Path) -> None:
     backend = FakeBackend(lambda t, p: draft_json(), close_errors=[f"close failed {TOKEN}"])
     report = run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
@@ -565,6 +619,51 @@ def test_sdk_backend_requires_skip_cli_download(tmp_path: Path) -> None:
         )
 
 
+async def test_sdk_backend_token_provider_accepts_sdk_origin_and_rejects_others(
+    tmp_path: Path,
+) -> None:
+    seen: list[str] = []
+
+    async def supplier(args: Any) -> Any:
+        seen.append(args["host"])
+        return {"kind": "token", "accessToken": "github_pat_x", "expiresIn": 60}
+
+    backend = SdkModelBackend(
+        runtime_path=str(tmp_path),
+        extra_env={"COPILOT_SKIP_CLI_DOWNLOAD": "1"},
+        initial_token_supplier=supplier,
+    )
+    args = {"host": "https://github.com", "session_id": "s", "reason": "initial"}
+    assert (await backend._token_provider(args))["kind"] == "token"  # type: ignore[arg-type]
+    with pytest.raises(PermissionError):
+        await backend._token_provider({**args, "host": "https://evil.example"})  # type: ignore[arg-type]
+    assert seen == ["https://github.com"]
+
+
+def test_output_schema_is_strict_structured_output_compatible() -> None:
+    objects: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            assert "default" not in node
+            if node.get("type") == "object" and "properties" in node:
+                objects.append(node)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(_OUTPUT_SCHEMA)
+    assert objects
+    for node in objects:
+        assert node["required"] == list(node["properties"])
+        assert node["additionalProperties"] is False
+    assert "gaps" in _OUTPUT_SCHEMA["required"]
+    # Host validation still accepts drafts that omit defaulted collections.
+    assert c.ModelReportDraft.model_validate({"status": "partial", "summary": "s"}).gaps == ()
+
+
 def test_scratch_root_must_exist(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         make_investigator(FakeCollector(), FakeBackend(lambda t, p: None), tmp_path / "missing")
@@ -637,3 +736,56 @@ def test_session_close_exception_is_categorized_gap(tmp_path: Path) -> None:
     assert report.status == "partial"
     assert any(gap.description == "model session cleanup failed" for gap in report.host_gaps)
     assert TOKEN not in report.model_dump_json()
+
+
+def test_supported_hypothesis_is_conclusive_despite_unrelated_gap(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+            return make_item(kind=kind, status=EvidenceStatus.ERROR)
+        return make_item(kind=kind)
+
+    supported = draft_json(
+        hypotheses=[
+            {
+                "statement": "The app cannot resolve its storage endpoint.",
+                "support_refs": ["E2"],
+                "contradiction_refs": [],
+                "verdict": "supported",
+            }
+        ]
+    )
+    report = run(
+        make_investigator(
+            FakeCollector(evidence), FakeBackend(lambda tools, prompt: supported), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.status == "partial" and report.partial_category is not None
+    assert report.draft is not None
+    assert report.conclusion == "conclusive"
+
+
+def test_unverified_hypothesis_with_gap_stays_inconclusive(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+            return make_item(kind=kind, status=EvidenceStatus.ERROR)
+        return make_item(kind=kind)
+
+    hedged = draft_json(
+        hypotheses=[
+            {
+                "statement": "Maybe the storage endpoint is wrong.",
+                "support_refs": [],
+                "contradiction_refs": [],
+                "verdict": "unverified",
+            }
+        ]
+    )
+    report = run(
+        make_investigator(
+            FakeCollector(evidence), FakeBackend(lambda tools, prompt: hedged), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.status == "partial" and report.draft is not None
+    assert report.conclusion == "inconclusive"

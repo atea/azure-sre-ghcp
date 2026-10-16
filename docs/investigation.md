@@ -55,6 +55,12 @@ SdkModelBackend(
    `authentication`, `response_schema`, `model_unavailable`, `model_request_rejected`,
    `runtime_unavailable`, or `unclassified`. The code is derived from the exception type and
    message, but the message itself is never stored or logged.
+   When the model's reply is rejected, the report records up to 20 `validation_notes`. Each
+   note has a fixed `code` (`no_response`, `oversized`, `invalid_json`, `not_object`,
+   `schema_violation`, or `evidence_reference`) and a host-written, redacted `detail`
+   (a field path plus the validator's message, never raw model text). The worker logs
+   `model output rejected: reason=<code> problems=<n> bytes=<n> incident=<prefix>`, and the
+   issue renders the notes under **Model output validation**.
 8. The host derives `host_findings` from OK evidence only, with no model involvement
    (`investigation/findings.py`). The codes are:
    - `storage_account_registry_mismatch`: the configured storage account differs from the

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, StringConstraints
 from azure_sre.config import BudgetPolicy
 from azure_sre.contracts import (
     MAX_MODEL_OUTPUT_BYTES,
+    MAX_VALIDATION_NOTES,
     ApplicationRegistry,
     DiagnosticWindow,
     EvidenceBundle,
@@ -30,6 +31,9 @@ from azure_sre.contracts import (
     NormalizedAlert,
     PartialCategory,
     ReportGap,
+    ReportValidationError,
+    ValidationNote,
+    ValidationNoteCode,
     has_conclusive_basis,
     validate_model_output,
 )
@@ -153,6 +157,12 @@ class _RunContext:
     deferred: InvestigationDeferred | None = None
     ai_link_verified: bool = False
     model_stage: str = "start"
+    notes: list[ValidationNote] = field(default_factory=list)
+
+    def note(self, code: ValidationNoteCode, detail: str) -> None:
+        if len(self.notes) < MAX_VALIDATION_NOTES:
+            text = redact_text(detail).strip()[:500] or code.value
+            self.notes.append(ValidationNote(code=code, detail=text))
 
     def mark(self, category: PartialCategory) -> None:
         if self.primary is None:
@@ -447,24 +457,48 @@ class CopilotInvestigator:
     def _draft(self, ctx: _RunContext, bundle: EvidenceBundle) -> ModelReportDraft | None:
         """Validate untrusted model output against the schema and the final evidence bundle."""
         raw = ctx.raw
-        if raw is None or len(raw.encode("utf-8")) > MAX_MODEL_OUTPUT_BYTES:
+        size = len(raw.encode("utf-8")) if raw is not None else 0
+
+        def reject(code: ValidationNoteCode, problems: tuple[str, ...]) -> None:
             ctx.mark(PartialCategory.INVALID_REPORT)
+            for problem in problems:
+                ctx.note(code, problem)
+            logger.warning(
+                "model output rejected: reason=%s problems=%d bytes=%d incident=%s",
+                code.value,
+                len(problems),
+                size,
+                ctx.alert.incident_key[:12],
+            )
+
+        if raw is None:
+            reject(ValidationNoteCode.NO_RESPONSE, ("the model returned no final reply",))
+            return None
+        if size > MAX_MODEL_OUTPUT_BYTES:
+            reject(ValidationNoteCode.OVERSIZED, ("model output exceeds size limit",))
             return None
         try:
             parsed = json.loads(raw)
         except ValueError:
-            ctx.mark(PartialCategory.INVALID_REPORT)
+            reject(ValidationNoteCode.INVALID_JSON, ("model output is not valid JSON",))
             return None
         if not isinstance(parsed, Mapping):
-            ctx.mark(PartialCategory.INVALID_REPORT)
+            reject(ValidationNoteCode.NOT_OBJECT, ("model output must be a JSON object",))
             return None
         # Status is host-owned: validate the reply as a draft and decide status in _report.
         document = {key: value for key, value in parsed.items() if key not in _HOST_OWNED_FIELDS}
         document["status"] = "partial"
         try:
             return validate_model_output(dict(redact_value(document)), bundle)
+        except ReportValidationError as exc:
+            try:
+                code = ValidationNoteCode(exc.reason)
+            except ValueError:
+                code = ValidationNoteCode.SCHEMA_VIOLATION
+            reject(code, exc.problems)
+            return None
         except ValueError:
-            ctx.mark(PartialCategory.INVALID_REPORT)
+            reject(ValidationNoteCode.SCHEMA_VIOLATION, ("model output failed validation",))
             return None
 
     def _report(self, ctx: _RunContext) -> InvestigationReport:
@@ -508,6 +542,7 @@ class CopilotInvestigator:
             host_gaps=tuple(gaps),
             host_findings=findings,
             conclusion="conclusive" if has_conclusive_basis(draft, findings) else "inconclusive",
+            validation_notes=tuple(ctx.notes),
         )
 
 

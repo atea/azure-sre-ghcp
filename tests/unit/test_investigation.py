@@ -468,6 +468,39 @@ def test_unknown_evidence_ref_is_rejected(tmp_path: Path) -> None:
     )
     assert report.status == "partial"
     assert report.partial_category is PartialCategory.INVALID_REPORT
+    notes = report.validation_notes
+    assert [n.code for n in notes] == [c.ValidationNoteCode.EVIDENCE_REFERENCE]
+    assert "unknown evidence id E999" in notes[0].detail
+
+
+@pytest.mark.parametrize(
+    ("reply", "code"),
+    [
+        ("not json", "invalid_json"),
+        ("[1, 2]", "not_object"),
+        ('{"summary": 5}', "schema_violation"),
+    ],
+)
+def test_rejected_model_output_records_reason_codes(
+    tmp_path: Path, reply: str, code: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: reply), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is None
+    assert report.partial_category is PartialCategory.INVALID_REPORT
+    assert report.validation_notes and {n.code.value for n in report.validation_notes} == {code}
+    assert f"model output rejected: reason={code}" in caplog.text
+    assert reply not in caplog.text
+
+
+def test_valid_model_output_has_no_validation_notes(tmp_path: Path) -> None:
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: draft_json()), tmp_path),
+        make_alert(),
+    )
+    assert report.validation_notes == ()
 
 
 def test_secret_in_model_summary_is_redacted(tmp_path: Path) -> None:

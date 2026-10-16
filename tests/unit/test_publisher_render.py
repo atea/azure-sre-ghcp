@@ -259,3 +259,24 @@ def test_sdk_failure_issue_keeps_error_samples_without_a_diagnosis() -> None:
 def test_escape_inline_entities_and_specials() -> None:
     assert escape_inline("a<b>&c *d* #e [f](g)") == "a&lt;b&gt;&amp;c \\*d\\* \\#e \\[f\\]\\(g\\)"
     assert escape_inline("") == "\\-"
+
+
+def test_validation_notes_render_only_when_present() -> None:
+    alert = make_alert()
+    base = complete_report(alert)
+    assert "Model output validation" not in render(base)
+    from azure_sre.worker.processor import host_partial_report
+
+    partial = host_partial_report(alert, c.PartialCategory.INVALID_REPORT, base.generated_at)
+    report = c.InvestigationReport.model_validate(
+        {
+            **partial.model_dump(),
+            "validation_notes": [
+                {"code": "evidence_reference", "detail": "observations.0: unknown id <b>@x"}
+            ],
+        }
+    )
+    body = render(report)
+    assert "## Model output validation" in body
+    assert "`evidence_reference`" in body
+    assert "<b>" not in body and "@x" not in body

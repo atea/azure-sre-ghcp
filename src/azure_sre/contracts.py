@@ -258,8 +258,16 @@ class AlertNormalizationError(ContractError):
 
 
 class ReportValidationError(ContractError):
-    def __init__(self, problems: Iterable[str], code: str = "invalid_report") -> None:
+    def __init__(
+        self,
+        problems: Iterable[str],
+        code: str = "invalid_report",
+        *,
+        reason: str = "schema_violation",
+    ) -> None:
         self.problems: tuple[str, ...] = tuple(problems) or ("invalid report",)
+        # A ValidationNoteCode value naming why the output was rejected.
+        self.reason = reason
         super().__init__(code, "; ".join(self.problems))
 
 
@@ -1161,6 +1169,27 @@ class ReportGap(StrictModel):
     evidence_refs: _OptionalRefs = ()
 
 
+class ValidationNoteCode(StrEnum):
+    """Why the host rejected or altered model output; recorded on the report."""
+
+    NO_RESPONSE = "no_response"
+    OVERSIZED = "oversized"
+    INVALID_JSON = "invalid_json"
+    NOT_OBJECT = "not_object"
+    SCHEMA_VIOLATION = "schema_violation"
+    EVIDENCE_REFERENCE = "evidence_reference"
+
+
+MAX_VALIDATION_NOTES: Final = 20
+
+
+class ValidationNote(StrictModel):
+    """A host-written note; ``detail`` never echoes raw model text."""
+
+    code: ValidationNoteCode
+    detail: ReportText
+
+
 class HostFindingCode(StrEnum):
     STORAGE_ACCOUNT_DNS_FAILURE = "storage_account_dns_failure"
     STORAGE_ACCOUNT_REGISTRY_MISMATCH = "storage_account_registry_mismatch"
@@ -1260,6 +1289,9 @@ class InvestigationReport(StrictModel):
     host_gaps: tuple[ReportGap, ...] = ()
     host_findings: tuple[HostFinding, ...] = ()
     conclusion: Conclusion = "inconclusive"
+    validation_notes: Annotated[
+        tuple[ValidationNote, ...], Field(max_length=MAX_VALIDATION_NOTES)
+    ] = ()
 
     @field_validator("generated_at")
     @classmethod
@@ -1345,23 +1377,27 @@ def validate_model_output(
     """Validate untrusted model output against the schema and the collected evidence."""
     if isinstance(raw, str):
         if len(raw.encode("utf-8", errors="replace")) > MAX_MODEL_OUTPUT_BYTES:
-            raise ReportValidationError(["model output exceeds size limit"])
+            raise ReportValidationError(["model output exceeds size limit"], reason="oversized")
         try:
             document: Any = json.loads(raw)
         except ValueError as exc:
-            raise ReportValidationError(["model output is not valid JSON"]) from exc
+            raise ReportValidationError(
+                ["model output is not valid JSON"], reason="invalid_json"
+            ) from exc
     elif isinstance(raw, Mapping):
         try:
             size = len(json.dumps(raw, ensure_ascii=False).encode("utf-8"))
         except (TypeError, ValueError) as exc:
-            raise ReportValidationError(["model output is not JSON-serializable"]) from exc
+            raise ReportValidationError(
+                ["model output is not JSON-serializable"], reason="invalid_json"
+            ) from exc
         if size > MAX_MODEL_OUTPUT_BYTES:
-            raise ReportValidationError(["model output exceeds size limit"])
+            raise ReportValidationError(["model output exceeds size limit"], reason="oversized")
         document = raw
     else:
-        raise ReportValidationError(["unsupported model output type"])
+        raise ReportValidationError(["unsupported model output type"], reason="not_object")
     if not isinstance(document, Mapping):
-        raise ReportValidationError(["model output must be a JSON object"])
+        raise ReportValidationError(["model output must be a JSON object"], reason="not_object")
     try:
         draft = ModelReportDraft.model_validate(document)
     except ValidationError as exc:
@@ -1369,7 +1405,7 @@ def validate_model_output(
 
     problems = _reference_problems(draft, evidence)
     if problems:
-        raise ReportValidationError(problems)
+        raise ReportValidationError(problems, reason="evidence_reference")
     return draft
 
 

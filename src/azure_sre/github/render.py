@@ -326,6 +326,14 @@ def render_issue_body(
             [line for item in report.evidence.items for line in _evidence_samples(item)],
             "_No evidence rows were collected; see provenance and gaps._",
         ),
+        "validation": _Section(
+            "Model output validation",
+            [
+                f"- `{n.code.value}`: {escape_inline(n.detail, 300)}"
+                for n in report.validation_notes
+            ],
+            "_No validation notes._",
+        ),
         "actions": _Section(
             "Developer actions",
             [
@@ -351,6 +359,8 @@ def render_issue_body(
         for key in order:
             lines += sections[key].render(budget_label)
         lines += ["## Gaps", "", *gap_tiers[state["gaps"]], ""]
+        if report.validation_notes:
+            lines += sections["validation"].render(budget_label)
         for key in ("samples", "evidence", "actions"):
             lines += sections[key].render(budget_label)
         lines += footer
@@ -376,6 +386,7 @@ def render_issue_body(
         "observations",
         "symptoms",
         "actions",
+        "validation",
         "timeline",
         "evidence",
     ):

@@ -116,8 +116,9 @@ The body has a fixed host layout:
   findings with evidence ids), **Alert** (trusted identity, severity,
   signal, fired time, window, rule, alert id, incident key), **Symptoms**, **Timeline**,
   **Observations**, **Hypotheses** (supported / contradicted / unverified, with evidence
-  ids), **Gaps**, **Evidence provenance**, **Developer actions** (checkboxes), and a
-  footer.
+  ids), **Gaps**, **Model output validation** (only when the host rejected or altered
+  model output), **Collected evidence samples**, **Evidence provenance**, **Developer
+  actions** (checkboxes), and a footer.
 
 All untrusted text is escaped:
 

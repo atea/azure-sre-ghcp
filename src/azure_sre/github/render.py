@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from azure_sre.contracts import (
+    CONCLUSIVE_HOST_FINDING_CODES,
     EvidenceItem,
     InvestigationReport,
     NormalizedAlert,
@@ -116,8 +117,10 @@ def _refs(refs: Sequence[str], label: str = "evidence") -> str:
 
 
 def render_issue_title(alert: NormalizedAlert, report: InvestigationReport) -> str:
-    summary = report.draft.summary if report.draft is not None else "investigation incomplete"
-    prefix = "[partial] " if report.status == "partial" else ""
+    summary = report.draft.summary if report.draft is not None else _finding_headline(report)
+    prefix = ""
+    if report.status == "partial":
+        prefix = "[likely cause] " if report.conclusion == "conclusive" else "[partial] "
     head = f"{prefix}[{alert.severity.value}] {alert.app_id} ({alert.environment}): "
     # Titles are not rendered as HTML, but angle brackets are still neutralized so an
     # untrusted summary can never carry a lookalike of the host marker comment.
@@ -126,6 +129,12 @@ def render_issue_title(alert: NormalizedAlert, report: InvestigationReport) -> s
     if len(title) > MAX_TITLE_CHARS:
         title = title[: MAX_TITLE_CHARS - 1].rstrip() + _ELLIPSIS
     return title
+
+
+def _finding_headline(report: InvestigationReport) -> str:
+    strong = [f for f in report.host_findings if f.code in CONCLUSIVE_HOST_FINDING_CODES]
+    findings = strong or list(report.host_findings)
+    return findings[0].text if findings else "investigation incomplete"
 
 
 @dataclass
@@ -222,7 +231,15 @@ def render_issue_body(
     )
 
     banner: list[str] = []
-    if report.status == "partial":
+    if report.status == "partial" and report.conclusion == "conclusive":
+        category = report.partial_category.value if report.partial_category else "unknown"
+        banner = [
+            "> [!IMPORTANT]",
+            f"> Likely cause identified; some evidence was unavailable (`{category}`). "
+            "See **Host-verified findings**, **Hypotheses** and **Gaps**.",
+            "",
+        ]
+    elif report.status == "partial":
         category = report.partial_category.value if report.partial_category else "unknown"
         banner = [
             "> [!WARNING]",

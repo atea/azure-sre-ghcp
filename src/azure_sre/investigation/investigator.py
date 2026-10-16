@@ -30,6 +30,7 @@ from azure_sre.contracts import (
     NormalizedAlert,
     PartialCategory,
     ReportGap,
+    has_conclusive_basis,
     validate_model_output,
 )
 from azure_sre.diagnostics.collector import CorrelationSelector, DiagnosticsError
@@ -471,6 +472,7 @@ class CopilotInvestigator:
         status: Literal["complete", "partial"] = "partial" if category is not None else "complete"
         if draft is not None and draft.status != status:
             draft = ModelReportDraft.model_validate({**draft.model_dump(), "status": status})
+        findings = derive_host_findings(bundle)
         return InvestigationReport(
             schema_version=1,
             incident_key=ctx.alert.incident_key,
@@ -484,7 +486,8 @@ class CopilotInvestigator:
             evidence=bundle,
             draft=draft,
             host_gaps=tuple(gaps),
-            host_findings=derive_host_findings(bundle),
+            host_findings=findings,
+            conclusion="conclusive" if has_conclusive_basis(draft, findings) else "inconclusive",
         )
 
 

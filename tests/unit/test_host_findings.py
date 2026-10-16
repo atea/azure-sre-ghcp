@@ -250,3 +250,83 @@ def test_prompt_has_empty_host_findings_without_evidence() -> None:
 
     prompt = build_prompt(make_alert(), bundle())
     assert '"host_findings": []' in prompt
+
+
+def partial_report(
+    evidence: c.EvidenceBundle, *, conclusion: c.Conclusion | None = None
+) -> tuple[c.NormalizedAlert, c.InvestigationReport]:
+    alert = make_alert()
+    evidence = evidence.model_copy(update={"incident_key": alert.incident_key})
+    findings = derive_host_findings(evidence)
+    report = c.InvestigationReport(
+        schema_version=1,
+        incident_key=alert.incident_key,
+        alert_id=alert.alert_id,
+        app_id=alert.app_id,
+        severity=alert.severity,
+        sink=alert.sink,
+        generated_at=T,
+        status="partial",
+        partial_category=c.PartialCategory.SDK_ERROR,
+        evidence=evidence,
+        host_findings=findings,
+        conclusion=conclusion
+        or ("conclusive" if c.has_conclusive_basis(None, findings) else "inconclusive"),
+    )
+    return alert, report
+
+
+def body_of(alert: c.NormalizedAlert, report: c.InvestigationReport) -> str:
+    return render_issue_body(
+        alert,
+        report,
+        marker=f"azure-sre:incident:{alert.incident_key}",
+        max_bytes=60_000,
+        window_before_minutes=15,
+        window_after_minutes=5,
+    )
+
+
+def test_storage_dns_finding_makes_partial_issue_a_likely_cause() -> None:
+    from azure_sre.github.render import render_issue_title
+
+    alert, report = partial_report(
+        bundle(health(**{"storage.configured_account": "stdemoapp1v2ho7"}), errors(dns_row()))
+    )
+    assert report.conclusion == "conclusive"
+    title = render_issue_title(alert, report)
+    assert title.startswith("[likely cause] [Sev")
+    assert "stdemoapp1v2ho7" in title and "investigation incomplete" not in title
+    body = body_of(alert, report)
+    assert "Likely cause identified; some evidence was unavailable (`sdk_error`)" in body
+    assert "Partial investigation" not in body
+
+
+def test_generic_dns_finding_is_partial_but_titled_by_the_finding() -> None:
+    from azure_sre.github.render import render_issue_title
+
+    alert, report = partial_report(bundle(errors(dns_row())))
+    assert report.conclusion == "inconclusive"
+    title = render_issue_title(alert, report)
+    assert title.startswith("[partial] [Sev")
+    assert "stdemoapp1v2ho7.table.core.windows.net" in title
+    assert "Partial investigation (`sdk_error`)" in body_of(alert, report)
+
+
+def test_no_findings_keeps_investigation_incomplete_title() -> None:
+    from azure_sre.github.render import render_issue_title
+
+    alert, report = partial_report(bundle())
+    assert render_issue_title(alert, report).endswith("investigation incomplete")
+
+
+def test_conclusive_report_requires_a_basis() -> None:
+    with pytest.raises(ValueError, match="conclusive report requires"):
+        partial_report(bundle(errors(dns_row())), conclusion="conclusive")
+
+
+def test_stored_report_without_conclusion_loads_as_inconclusive() -> None:
+    _, report = partial_report(bundle())
+    stored = report.model_dump(mode="json")
+    del stored["conclusion"]
+    assert c.InvestigationReport.model_validate(stored).conclusion == "inconclusive"

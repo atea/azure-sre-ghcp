@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
@@ -33,6 +33,7 @@ from pydantic import (
 
 __all__ = [
     "ALERT_SCHEMA_ID",
+    "CONCLUSIVE_HOST_FINDING_CODES",
     "HARD_MAX_CLI_CALL_SECONDS",
     "HARD_MAX_CONCURRENCY_PER_REPLICA",
     "HARD_MAX_DIAGNOSTIC_CALLS",
@@ -55,6 +56,7 @@ __all__ = [
     "CommonAlertData",
     "CommonAlertEssentials",
     "CommonAlertPayload",
+    "Conclusion",
     "ContractError",
     "DeveloperAction",
     "DiagnosticWindow",
@@ -88,6 +90,7 @@ __all__ = [
     "StrictModel",
     "TargetKind",
     "delivery_id",
+    "has_conclusive_basis",
     "incident_key",
     "incident_window",
     "normalize_alert",
@@ -1165,12 +1168,24 @@ class HostFindingCode(StrEnum):
     HTTP_5XX_WITH_DEPENDENCY_FAILURE = "http_5xx_with_dependency_failure"
 
 
+# Findings that on their own name a specific, actionable cause.
+CONCLUSIVE_HOST_FINDING_CODES: Final = frozenset(
+    {
+        HostFindingCode.STORAGE_ACCOUNT_DNS_FAILURE,
+        HostFindingCode.STORAGE_ACCOUNT_REGISTRY_MISMATCH,
+    }
+)
+
+
 class HostFinding(StrictModel):
     """A host-derived, fixed-template correlation of OK evidence; never model-written."""
 
     code: HostFindingCode
     text: ReportText
     evidence_refs: _Refs
+
+
+Conclusion = Literal["conclusive", "inconclusive"]
 
 
 class ModelReportDraft(StrictModel):
@@ -1240,6 +1255,7 @@ class InvestigationReport(StrictModel):
     draft: ModelReportDraft | None = None
     host_gaps: tuple[ReportGap, ...] = ()
     host_findings: tuple[HostFinding, ...] = ()
+    conclusion: Conclusion = "inconclusive"
 
     @field_validator("generated_at")
     @classmethod
@@ -1274,7 +1290,18 @@ class InvestigationReport(StrictModel):
             )
         if problems:
             raise fail("; ".join(problems))
+        if self.conclusion == "conclusive" and not has_conclusive_basis(
+            self.draft, self.host_findings
+        ):
+            raise fail("conclusive report requires a supported hypothesis or conclusive finding")
         return self
+
+
+def has_conclusive_basis(draft: ModelReportDraft | None, findings: Sequence[HostFinding]) -> bool:
+    """A likely cause is named by a supported, evidence-backed hypothesis or a strong finding."""
+    if draft is not None and any(h.verdict == "supported" for h in draft.hypotheses):
+        return True
+    return any(f.code in CONCLUSIVE_HOST_FINDING_CODES for f in findings)
 
 
 def _check_refs(

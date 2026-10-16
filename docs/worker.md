@@ -173,7 +173,7 @@ already-terminal incidents are not retroactively re-investigated or given recomm
 Use the same ETag-conditional operator workflow to re-arm a blocked recommendation, after
 checking its marker in GitHub; never blindly reset an uncertain write to `pending`.
 
-Stored reports gain an optional `host_findings` field, which older strict decoders reject.
+Stored reports gain optional `host_findings` and `conclusion` fields, which older strict decoders reject.
 Drain old worker replicas before deploying a version that writes it as well.
 
 - `OPERATOR_REQUIRED` rows carry a safe `operator_reason`:

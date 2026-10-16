@@ -736,3 +736,56 @@ def test_session_close_exception_is_categorized_gap(tmp_path: Path) -> None:
     assert report.status == "partial"
     assert any(gap.description == "model session cleanup failed" for gap in report.host_gaps)
     assert TOKEN not in report.model_dump_json()
+
+
+def test_supported_hypothesis_is_conclusive_despite_unrelated_gap(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+            return make_item(kind=kind, status=EvidenceStatus.ERROR)
+        return make_item(kind=kind)
+
+    supported = draft_json(
+        hypotheses=[
+            {
+                "statement": "The app cannot resolve its storage endpoint.",
+                "support_refs": ["E2"],
+                "contradiction_refs": [],
+                "verdict": "supported",
+            }
+        ]
+    )
+    report = run(
+        make_investigator(
+            FakeCollector(evidence), FakeBackend(lambda tools, prompt: supported), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.status == "partial" and report.partial_category is not None
+    assert report.draft is not None
+    assert report.conclusion == "conclusive"
+
+
+def test_unverified_hypothesis_with_gap_stays_inconclusive(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+            return make_item(kind=kind, status=EvidenceStatus.ERROR)
+        return make_item(kind=kind)
+
+    hedged = draft_json(
+        hypotheses=[
+            {
+                "statement": "Maybe the storage endpoint is wrong.",
+                "support_refs": [],
+                "contradiction_refs": [],
+                "verdict": "unverified",
+            }
+        ]
+    )
+    report = run(
+        make_investigator(
+            FakeCollector(evidence), FakeBackend(lambda tools, prompt: hedged), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.status == "partial" and report.draft is not None
+    assert report.conclusion == "inconclusive"

@@ -60,6 +60,12 @@ SdkModelBackend(
    Values must match strict patterns before they reach finding text. Findings are kept even
    when the model session fails, so a partial report can still name the likely cause.
    `InvestigationReport` rejects findings that cite missing or non-OK evidence.
+9. `conclusion` is independent of `status`. A report is `conclusive` when the draft has a
+   `supported` hypothesis (whose refs are already validated as OK evidence) or when a
+   conclusive finding (`storage_account_dns_failure`, `storage_account_registry_mismatch`)
+   exists. A partial report can therefore name a likely cause while still listing
+   unrelated gaps. The report validator rejects `conclusive` without such a basis. Stored
+   reports without the field load as `inconclusive`.
 
 ### SDK contract notes
 

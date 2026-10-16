@@ -188,7 +188,7 @@ class FakePublisher:
             if isinstance(result, BaseException):
                 raise result
             return result
-        record = published_record(request)
+        record = published_record(request, 8 if request.purpose == "probe_improvement" else 7)
         self.issues[request.marker] = record
         return PublishResult(status=PublicationStatus.PUBLISHED, record=record)
 

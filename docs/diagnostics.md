@@ -14,7 +14,8 @@ Package `azure_sre.diagnostics`:
     (ids `E1`, `E2`, ... in call order)
 - `DiagnosticKind` (StrEnum): `container_app_health`, `container_app_revisions`,
   `app_insights_exceptions`, `app_insights_operations`, `container_app_console_logs`,
-  `container_app_system_logs`, `activity_log_deployments`.
+  `container_app_console_errors`, `container_app_system_logs`, `activity_log_deployments`,
+  `app_insights_configuration`, `storage_account_configuration`.
 - `CorrelationSelector(operation_id: str | None)`: operation IDs must match
   `^[A-Za-z0-9._:-]{1,128}$`. Only the AI operation tables accept it.
 - `DiagnosticsError(ValueError)`: rejected selectors, unknown apps, oversized windows.
@@ -53,8 +54,10 @@ Fixed templates only (`TEMPLATES`). Every KQL query is bound to its resource and
 | --- | --- | --- |
 | Container app health | `az containerapp show` | name, resource group |
 | Container app revisions | `az containerapp revision list` | name, resource group |
+| AI workspace linkage | `az resource show` | trusted component ARM ID, fixed API version; compare linked workspace to registry |
+| Storage configuration | `az storage account show` | optional trusted storage account ARM ID only |
 | AI exceptions / operations | `az monitor log-analytics query --workspace <GUID>` | `AppExceptions` / `AppRequests`+`AppDependencies` filtered by AI component `_ResourceId` and time |
-| Console / system logs | `az monitor log-analytics query --workspace <GUID>` | `ContainerAppConsoleLogs_CL` / `ContainerAppSystemLogs_CL` filtered by Container App `_ResourceId` and time |
+| Console / system logs | `az monitor log-analytics query --workspace <GUID>` | `ContainerAppConsoleLogs_CL` / `ContainerAppSystemLogs_CL` filtered by Container App `_ResourceId` and time; empty IDs fall back to trusted `ContainerAppName_s` within the application-owned workspace |
 | Deployments | `az monitor activity-log list --resource-id <ARM ID>` | one resource ID, `--start-time` / `--end-time` |
 
 The AI component (`_ResourceId` for AI tables) and the Container App (`_ResourceId` for
@@ -62,7 +65,37 @@ container logs) are kept separate. Each query takes at most 101 rows: 100 are ke
 extra row marks the result as truncated. The server limit is only a hint, so the host also
 truncates.
 
+Container log templates v2 accept an empty `_ResourceId` only when `ContainerAppName_s`
+matches the registry application name. Non-empty conflicting IDs are never accepted.
+The workspace must be dedicated to this application (as required by registry ownership);
+do not configure this fallback against a workspace containing identically named apps from
+different Container Apps environments.
+
 ## Row projection
+
+The host baseline collects health, `container_app_console_errors`, AI workspace linkage,
+then AI exceptions
+before opening the model session. The console error template groups DNS resolution failures,
+HTTP 5xx access logs and application error lines by error class and revision. Each group
+contains a count, first/last timestamp and one sample capped at 1000 characters. Results
+use the normal row/byte limits and redaction; zero matches are not proof of health.
+This evidence is retained even if inference fails.
+
+Health projection additionally extracts only `AZURE_STORAGE_ACCOUNT_NAME` from the
+container environment. Invalid, secret-referenced, missing or conflicting settings are
+reported explicitly without exposing arbitrary environment values. With a trusted
+`storage_account_id`, the evidence includes expected/observed account names and a match
+boolean. The baseline then runs `storage_account_configuration`, a management-plane
+`az storage account show` against that exact registry ID. Missing resources and denied
+reads retain explicit error statuses. No keys, data-plane reads or model-chosen DNS probes
+are used.
+
+The health diagnostic also assesses explicit readiness probes independently of liveness
+and startup. TCP readiness establishes listener availability only; absent explicit probes
+may be filled by platform defaults. Either case produces a review recommendation, not a
+root-cause claim. HTTP readiness is reported without assuming its handler checks dependencies.
+Malformed configuration is classified as unknown. Probe payloads, HTTP headers and env
+secrets are never passed into evidence; only fixed scalar assessment fields are retained.
 
 `project_row` keeps only allowlisted scalar fields (dotted paths for nested JSON). It returns
 `None` when a row has no recognised field. Such payloads are classified as `ERROR`

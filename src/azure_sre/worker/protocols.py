@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from typing import Annotated, Final, Protocol, Self
+from typing import Annotated, Final, Literal, Protocol, Self
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -95,6 +95,7 @@ class PublishRequest(StrictModel):
     sink: Sink
     marker: Annotated[str, StringConstraints(min_length=1, max_length=128)]
     attempt: Annotated[int, Field(strict=True, ge=1)]
+    purpose: Literal["incident", "probe_improvement"] = "incident"
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

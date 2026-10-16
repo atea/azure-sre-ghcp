@@ -34,6 +34,7 @@ from azure_sre.contracts import (
     ReportGap,
     Sink,
 )
+from azure_sre.github.recommendations import probe_recommendation_refs
 from azure_sre.state.errors import (
     LeaseLost,
     ReportUnavailable,
@@ -44,10 +45,12 @@ from azure_sre.state.errors import (
     TransientStateError,
 )
 from azure_sre.state.records import (
+    ImprovementState,
     IncidentPhase,
     IncidentRecord,
     RecoveryLedger,
     RecoveryState,
+    improvement_marker,
     issue_marker,
     recovery_marker,
 )
@@ -301,6 +304,12 @@ class IncidentProcessor:
             return await self._pending_fired(claim, now)
         assert rec.fired is not None  # noqa: S101 - enforced by IncidentRecord invariants
         if rec.phase in _PUBLISHED:
+            if rec.improvement_state in (
+                ImprovementState.PENDING,
+                ImprovementState.WRITING,
+                ImprovementState.UNCERTAIN,
+            ):
+                return await self._improvement(claim)
             return await self._recovery(claim)
         try:
             alert = bind_alert(rec.fired, self._registry)
@@ -473,7 +482,11 @@ class IncidentProcessor:
             return None
 
     async def _request(
-        self, claim: IncidentClaim, alert: NormalizedAlert
+        self,
+        claim: IncidentClaim,
+        alert: NormalizedAlert,
+        *,
+        improvement: bool = False,
     ) -> tuple[Publisher, PublishRequest] | str:
         route = self._route(alert)
         if route is None:
@@ -488,8 +501,14 @@ class IncidentProcessor:
                 report=report,
                 repository=repository,
                 sink=alert.sink,
-                marker=issue_marker(claim.key),
-                attempt=max(claim.record.publish_attempts, 1),
+                marker=improvement_marker(claim.key) if improvement else issue_marker(claim.key),
+                attempt=max(
+                    claim.record.improvement_attempts
+                    if improvement
+                    else claim.record.publish_attempts,
+                    1,
+                ),
+                purpose="probe_improvement" if improvement else "incident",
             )
         except (ContractError, ValidationError):
             return "invalid_publication"
@@ -593,6 +612,11 @@ class IncidentProcessor:
                         failure_category=None,
                         next_attempt_at=None,
                         reconcile_attempts=0,
+                        improvement_state=(
+                            ImprovementState.PENDING
+                            if probe_recommendation_refs(request.report)
+                            else None
+                        ),
                     ),
                     expect=_RECONCILE,
                     require_live=False,
@@ -628,6 +652,7 @@ class IncidentProcessor:
                     require_live=False,
                 )
                 return DriveOutcome.DEFERRED
+
             settle_at = intent_at + timedelta(seconds=self._settings.not_found_settle_seconds)
             next_at = min(settle_at, now + self._delay(claim.record.reconcile_attempts))
         else:
@@ -643,6 +668,144 @@ class IncidentProcessor:
             require_live=False,
         )
         _log.warning("worker.publication_uncertain incident=%s", _short(claim.key))
+        return DriveOutcome.DEFERRED
+
+    async def _improvement(self, claim: IncidentClaim) -> DriveOutcome | None:
+        """A separate, bounded issue write under the incident's conditional lease."""
+        rec = claim.record
+        assert rec.fired is not None  # noqa: S101
+        try:
+            alert = bind_alert(rec.fired, self._registry)
+        except PoisonMessage:
+            return await self._improvement_blocked(claim, "registry_mismatch")
+        prepared = await self._request(claim, alert, improvement=True)
+        if isinstance(prepared, str):
+            return await self._improvement_blocked(claim, prepared)
+        publisher, request = prepared
+        if not probe_recommendation_refs(request.report):
+            return await self._improvement_blocked(claim, "recommendation_missing")
+        reconciling = rec.improvement_state in (
+            ImprovementState.WRITING,
+            ImprovementState.UNCERTAIN,
+        )
+        s = self._settings
+        if reconciling and rec.improvement_reconcile_attempts >= s.max_reconcile_attempts:
+            return await self._improvement_blocked(claim, "improvement_uncertain")
+        if not reconciling and rec.improvement_attempts >= s.max_publish_attempts:
+            return await self._improvement_blocked(claim, "improvement_attempts_exhausted")
+        await self._ensure_publish_window(claim)
+        if reconciling:
+            await claim.update(
+                lambda r: r.evolve(
+                    improvement_state=ImprovementState.UNCERTAIN,
+                    improvement_reconcile_attempts=r.improvement_reconcile_attempts + 1,
+                    next_attempt_at=None,
+                ),
+                expect=_PUBLISHED,
+            )
+            result = await self._call(publisher.reconcile(request))
+        else:
+            now = self._now()
+            updated = await claim.update(
+                lambda r: r.evolve(
+                    improvement_state=ImprovementState.WRITING,
+                    improvement_intent_at=now,
+                    improvement_attempts=r.improvement_attempts + 1,
+                    improvement_reconcile_attempts=0,
+                    improvement_reason=None,
+                    next_attempt_at=None,
+                ),
+                expect=_PUBLISHED,
+            )
+            request = request.model_copy(update={"attempt": updated.improvement_attempts})
+            result = await self._call(publisher.publish(request))
+        return await self._apply_improvement(claim, request, result, reconciling=reconciling)
+
+    async def _improvement_blocked(
+        self,
+        claim: IncidentClaim,
+        reason: str,
+    ) -> DriveOutcome | None:
+        await claim.update(
+            lambda r: r.evolve(
+                improvement_state=ImprovementState.OPERATOR_REQUIRED,
+                improvement_reason=reason,
+                next_attempt_at=None,
+            ),
+            expect=_PUBLISHED,
+        )
+        _log.error("worker.improvement_blocked incident=%s reason=%s", _short(claim.key), reason)
+        return None
+
+    async def _apply_improvement(
+        self,
+        claim: IncidentClaim,
+        request: PublishRequest,
+        result: PublishResult | None,
+        *,
+        reconciling: bool,
+    ) -> DriveOutcome | None:
+        rec = claim.record
+        now = self._now()
+        status = result.status if result is not None else PublicationStatus.UNCERTAIN
+        if result is not None and status is PublicationStatus.PUBLISHED:
+            record = result.record
+            assert record is not None  # noqa: S101
+            if (
+                record.repository == request.repository
+                and record.incident_key == claim.key
+                and record.marker == request.marker
+                and rec.publication is not None
+                and record.issue_number != rec.publication.issue_number
+            ):
+                await claim.update(
+                    lambda r: r.evolve(
+                        improvement_state=ImprovementState.PUBLISHED,
+                        improvement_publication=record,
+                        improvement_reason=None,
+                        next_attempt_at=None,
+                    ),
+                    expect=_PUBLISHED,
+                    require_live=False,
+                )
+                return None
+            status = PublicationStatus.UNCERTAIN
+        reason = (result.reason if result is not None else None) or status.value
+        intent_at = rec.improvement_intent_at or now
+        if result is not None and status is PublicationStatus.ABSENT:
+            if not result.retryable:
+                return await self._improvement_blocked(claim, reason)
+            settled = now - intent_at >= timedelta(seconds=self._settings.not_found_settle_seconds)
+            if not reconciling or settled:
+                await claim.update(
+                    lambda r: r.evolve(
+                        improvement_state=ImprovementState.PENDING,
+                        improvement_intent_at=None,
+                        improvement_reason=reason,
+                        next_attempt_at=now
+                        + self._delay(
+                            max(rec.improvement_attempts, 1),
+                            result.retry_after_seconds,
+                        ),
+                    ),
+                    expect=_PUBLISHED,
+                    require_live=False,
+                )
+                return DriveOutcome.DEFERRED
+        retry_after = result.retry_after_seconds if result is not None else None
+        await claim.update(
+            lambda r: r.evolve(
+                improvement_state=ImprovementState.UNCERTAIN,
+                improvement_reason=reason,
+                next_attempt_at=now
+                + self._delay(
+                    max(rec.improvement_reconcile_attempts, 1),
+                    retry_after,
+                ),
+            ),
+            expect=_PUBLISHED,
+            require_live=False,
+        )
         return DriveOutcome.DEFERRED
 
     # ------------------------------------------------------------------ recovery

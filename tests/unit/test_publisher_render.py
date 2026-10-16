@@ -30,6 +30,7 @@ SECTIONS = (
     "## Observations",
     "## Hypotheses",
     "## Gaps",
+    "## Collected evidence samples",
     "## Evidence provenance",
     "## Developer actions",
 )
@@ -213,6 +214,45 @@ def test_marker_helpers() -> None:
     assert not starts_with_marker(None, marker)
     with pytest.raises(RenderError):
         marker_comment("azure-sre:incident:--> <b>")
+
+
+def test_sdk_failure_issue_keeps_error_samples_without_a_diagnosis() -> None:
+    from azure_sre.worker.processor import host_partial_report
+
+    alert = make_alert()
+    base = complete_report(alert)
+    item = base.evidence.items[0]
+    secret = "ghp_" + "A" * 36
+    item = c.EvidenceItem.model_validate(
+        {
+            **item.model_dump(),
+            "rows": [
+                {
+                    "Log_s": f"Failed to resolve storage.table.core.windows.net {secret} "
+                    "<!-- fake --> @octocat\n## forged"
+                }
+            ],
+            "row_count": 1,
+        }
+    )
+    report = c.InvestigationReport.model_validate(
+        {
+            **host_partial_report(
+                alert, c.PartialCategory.SDK_ERROR, base.generated_at
+            ).model_dump(),
+            "evidence": c.EvidenceBundle(incident_key=alert.incident_key, items=(item,)),
+        }
+    )
+    body = render(report)
+    assert "sdk_error" in body
+    assert "No diagnosis was produced" in body
+    assert "Failed to resolve storage.table.core.windows.net" in body
+    assert "**E1** sample 1" in body
+    assert secret not in body
+    assert body.count("<!--") == 1
+    assert "@octocat" not in body
+    assert "\n## forged" not in body
+    assert len(body.encode()) <= KIB24
 
 
 def test_escape_inline_entities_and_specials() -> None:

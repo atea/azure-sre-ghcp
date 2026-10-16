@@ -47,15 +47,17 @@ from azure_sre.github.mcp_client import (
     single_leaf,
     stdio_session_factory,
 )
+from azure_sre.github.recommendations import probe_recommendation_refs
 from azure_sre.github.render import (
     RenderError,
     render_issue_body,
     render_issue_title,
+    render_probe_improvement,
     render_recovery_comment,
     starts_with_marker,
 )
 from azure_sre.runtime.mcp_policy import McpPolicyError, RepositoryTarget
-from azure_sre.state.records import issue_marker, recovery_marker
+from azure_sre.state.records import improvement_marker, issue_marker, recovery_marker
 from azure_sre.worker.messages import PoisonMessage, bind_alert
 from azure_sre.worker.protocols import (
     MAX_RETRY_AFTER_SECONDS,
@@ -277,8 +279,15 @@ class McpPublisher:
             raise _Rejected("test_sink_rejected")
         alert, report = request.alert, request.report
         mapping = self._mapping(alert, request.repository)
-        if request.marker != issue_marker(alert.incident_key):
+        expected_marker = (
+            improvement_marker(alert.incident_key)
+            if request.purpose == "probe_improvement"
+            else issue_marker(alert.incident_key)
+        )
+        if request.marker != expected_marker:
             raise _Rejected("marker_mismatch")
+        if request.purpose == "probe_improvement" and not probe_recommendation_refs(report):
+            raise _Rejected("recommendation_missing")
         if (
             report.alert_id != alert.alert_id
             or report.app_id != alert.app_id
@@ -390,15 +399,23 @@ class McpPublisher:
     async def publish(self, request: PublishRequest) -> PublishResult:
         try:
             mapping = self._check_publish(request)
-            title = render_issue_title(request.alert, request.report)
-            body = render_issue_body(
-                request.alert,
-                request.report,
-                marker=request.marker,
-                max_bytes=self._budget.issue_body_bytes,
-                window_before_minutes=self._budget.window_before_minutes,
-                window_after_minutes=self._budget.window_after_minutes,
-            )
+            if request.purpose == "probe_improvement":
+                title, body = render_probe_improvement(
+                    request.alert,
+                    request.report,
+                    marker=request.marker,
+                    max_bytes=self._budget.issue_body_bytes,
+                )
+            else:
+                title = render_issue_title(request.alert, request.report)
+                body = render_issue_body(
+                    request.alert,
+                    request.report,
+                    marker=request.marker,
+                    max_bytes=self._budget.issue_body_bytes,
+                    window_before_minutes=self._budget.window_before_minutes,
+                    window_after_minutes=self._budget.window_after_minutes,
+                )
         except _Rejected as exc:
             return _absent(exc.reason, retryable=False)
         except RenderError:

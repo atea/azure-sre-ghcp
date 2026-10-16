@@ -53,9 +53,22 @@ Each application mapping uses the field rules in `azure_sre.contracts.Applicatio
 - `app_id`, `environment`: names.
 - `subscription_id`: GUID. Every ARM resource ID below must sit in this subscription.
 - `container_app_id`: `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/containerApps/<name>`.
+- `storage_account_id`: optional trusted `.../providers/Microsoft.Storage/storageAccounts/<name>`.
+  The health diagnostic compares the exact allowlisted non-secret setting
+  `AZURE_STORAGE_ACCOUNT_NAME` to this account name. The host baseline reads the account's
+  management-plane configuration to verify it exists; grant Reader on this account only.
+  It never lists keys or queries account data, probes arbitrary hosts, or follows log URLs.
 - `app_insights_component_id`: `.../providers/Microsoft.Insights/components/<name>`.
 - `log_analytics_workspace_id`: workspace GUID.
 - `log_analytics_workspace_resource_id`: optional `.../providers/Microsoft.OperationalInsights/workspaces/<name>`.
+- `app_insights_workspace_id`, `app_insights_workspace_resource_id`: optional pair, the
+  workspace GUID and ARM ID receiving this component's App Insights telemetry. Both must
+  be provided together. If omitted, AI queries retain the legacy Container Apps workspace
+  routing. Baseline `app_insights_configuration` verifies the component's
+  `WorkspaceResourceId` against the configured ARM ID (or legacy workspace ARM ID);
+  missing or mismatched linkage produces an explicit evidence gap.
+  Grant the worker Reader on the component and Log Analytics Reader on its workspace;
+  no broader subscription/group grants are needed.
 - `repository`: `owner/name`.
 - `installation_id`: positive integer, the GitHub App installation.
 

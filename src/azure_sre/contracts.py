@@ -164,10 +164,13 @@ class TargetKind(StrEnum):
 
 class EvidenceSource(StrEnum):
     CONTAINER_APP_HEALTH = "container_app_health"
+    STORAGE_ACCOUNT_CONFIGURATION = "storage_account_configuration"
     CONTAINER_APP_REVISIONS = "container_app_revisions"
     APP_INSIGHTS_EXCEPTIONS = "app_insights_exceptions"
+    APP_INSIGHTS_CONFIGURATION = "app_insights_configuration"
     APP_INSIGHTS_OPERATIONS = "app_insights_operations"
     CONTAINER_APP_CONSOLE_LOGS = "container_app_console_logs"
+    CONTAINER_APP_CONSOLE_ERRORS = "container_app_console_errors"
     CONTAINER_APP_SYSTEM_LOGS = "container_app_system_logs"
     ACTIVITY_LOG_DEPLOYMENTS = "activity_log_deployments"
 
@@ -438,9 +441,12 @@ class ApplicationMapping(StrictModel):
     environment: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     subscription_id: str
     container_app_id: str
+    storage_account_id: str | None = None
     app_insights_component_id: str
     log_analytics_workspace_id: str
     log_analytics_workspace_resource_id: str | None = None
+    app_insights_workspace_id: str | None = None
+    app_insights_workspace_resource_id: str | None = None
     repository: Repository
     installation_id: Annotated[int, Field(strict=True, gt=0)]
 
@@ -454,17 +460,34 @@ class ApplicationMapping(StrictModel):
     def _workspace_guid(cls, value: str) -> str:
         return _normalize_guid(value, "log_analytics_workspace_id")
 
+    @field_validator("app_insights_workspace_id")
+    @classmethod
+    def _ai_workspace_guid(cls, value: str | None) -> str | None:
+        return None if value is None else _normalize_guid(value, "app_insights_workspace_id")
+
     @field_validator("container_app_id")
     @classmethod
     def _container_app(cls, value: str) -> str:
         return _canonical_of_kind(value, TargetKind.CONTAINER_APP)
+
+    @field_validator("storage_account_id")
+    @classmethod
+    def _storage_account(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        resource = parse_resource_id(value)
+        if resource.type_key != "microsoft.storage/storageaccounts":
+            raise ContractError("invalid_mapping", "dependency must be a storage account")
+        if not re.fullmatch(r"[a-z0-9]{3,24}", resource.name):
+            raise ContractError("invalid_mapping", "invalid storage account name")
+        return resource.canonical
 
     @field_validator("app_insights_component_id")
     @classmethod
     def _component(cls, value: str) -> str:
         return _canonical_of_kind(value, TargetKind.APP_INSIGHTS_COMPONENT)
 
-    @field_validator("log_analytics_workspace_resource_id")
+    @field_validator("log_analytics_workspace_resource_id", "app_insights_workspace_resource_id")
     @classmethod
     def _workspace_resource(cls, value: str | None) -> str | None:
         if value is None:
@@ -473,7 +496,14 @@ class ApplicationMapping(StrictModel):
 
     @model_validator(mode="after")
     def _same_subscription(self) -> Self:
-        for canonical in self.arm_ids():
+        if (self.app_insights_workspace_id is None) != (
+            self.app_insights_workspace_resource_id is None
+        ):
+            raise ContractError("invalid_mapping", "App Insights workspace fields must be paired")
+        for canonical in (
+            *self.arm_ids(),
+            *((self.storage_account_id,) if self.storage_account_id else ()),
+        ):
             if parse_resource_id(canonical).subscription_id != self.subscription_id:
                 raise ContractError(
                     NormalizationErrorCode.CROSS_SUBSCRIPTION,
@@ -485,6 +515,8 @@ class ApplicationMapping(StrictModel):
         ids = [self.container_app_id, self.app_insights_component_id]
         if self.log_analytics_workspace_resource_id is not None:
             ids.append(self.log_analytics_workspace_resource_id)
+        if self.app_insights_workspace_resource_id is not None:
+            ids.append(self.app_insights_workspace_resource_id)
         return tuple(ids)
 
     def target_kinds(self) -> dict[str, TargetKind]:

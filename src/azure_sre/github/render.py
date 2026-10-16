@@ -11,6 +11,7 @@ truncation is explicit and never drops the Gaps section.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Callable, Sequence
@@ -25,6 +26,7 @@ from azure_sre.contracts import (
     ReportGap,
     incident_window,
 )
+from azure_sre.github.recommendations import probe_recommendation_refs
 from azure_sre.security.redaction import redact_text
 
 __all__ = [
@@ -39,7 +41,7 @@ __all__ = [
 ]
 
 MAX_TITLE_CHARS: Final = 256
-_MARKER_RE: Final = re.compile(r"^azure-sre:(?:incident|recovery):[0-9a-f]{64}$")
+_MARKER_RE: Final = re.compile(r"^azure-sre:(?:incident|recovery|improvement):[0-9a-f]{64}$")
 _URL_SCHEME_RE: Final = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}):(/{1,})")
 _WWW_RE: Final = re.compile(r"(?i)\bwww\.")
 _MD_SPECIALS: Final = frozenset("\\`*_{}[]()#!|~")
@@ -184,10 +186,22 @@ def _evidence_line(item: EvidenceItem) -> str:
     ]
     if item.error is not None:
         parts.append(f"error `{item.error.category.value}`")
+        parts.append(escape_inline(item.error.message, 200))
     line = " · ".join(parts)
     if item.summary:
         line += f" — {escape_inline(item.summary, 300)}"
     return line
+
+
+def _evidence_samples(item: EvidenceItem) -> list[str]:
+    lines = [
+        f"- **{item.evidence_id}** sample {index}: "
+        f"{escape_inline(json.dumps(dict(row), sort_keys=True, ensure_ascii=False), 1000)}"
+        for index, row in enumerate(item.rows[:3], start=1)
+    ]
+    if len(item.rows) > 3:
+        lines.append(f"- **{item.evidence_id}**: additional rows omitted from this issue.")
+    return lines
 
 
 def render_issue_body(
@@ -280,6 +294,11 @@ def render_issue_body(
             [_evidence_line(i) for i in report.evidence.items],
             "_No evidence was collected._",
         ),
+        "samples": _Section(
+            "Collected evidence samples",
+            [line for item in report.evidence.items for line in _evidence_samples(item)],
+            "_No evidence rows were collected; see provenance and gaps._",
+        ),
         "actions": _Section(
             "Developer actions",
             [
@@ -304,7 +323,7 @@ def render_issue_body(
         for key in order:
             lines += sections[key].render(budget_label)
         lines += ["## Gaps", "", *gap_tiers[state["gaps"]], ""]
-        for key in ("evidence", "actions"):
+        for key in ("samples", "evidence", "actions"):
             lines += sections[key].render(budget_label)
         lines += footer
         return redact_text("\n".join(lines) + "\n")
@@ -322,7 +341,15 @@ def render_issue_body(
             raise RenderError("issue body budget too small for required content")
 
     # Optional items in priority order; each section keeps its leading items.
-    for key in ("hypotheses", "observations", "symptoms", "actions", "timeline", "evidence"):
+    for key in (
+        "samples",
+        "hypotheses",
+        "observations",
+        "symptoms",
+        "actions",
+        "timeline",
+        "evidence",
+    ):
         _fill(sections[key], fits)
 
     body = compose()
@@ -371,3 +398,62 @@ def render_recovery_comment(resolved: NormalizedAlert, *, marker: str, max_bytes
     if not starts_with_marker(body, marker) or len(body.encode("utf-8")) > max_bytes:
         raise RenderError("recovery comment failed final checks")
     return body
+
+
+def render_probe_improvement(
+    alert: NormalizedAlert,
+    report: InvestigationReport,
+    *,
+    marker: str,
+    max_bytes: int,
+) -> tuple[str, str]:
+    refs = probe_recommendation_refs(report)
+    if not refs:
+        raise RenderError("no host-verified probe recommendation")
+    title = (
+        f"[suggested improvement] {alert.app_id} ({alert.environment}): "
+        "review dependency-aware readiness probes"
+    )
+    lines = [
+        marker_comment(marker),
+        "",
+        "## Suggested improvement",
+        "",
+        f"Review readiness probes for `{alert.app_id}` (`{alert.environment}`).",
+        "Collected configuration shows TCP readiness probes or containers without explicit "
+        "readiness probes. TCP probes establish only that a port accepts connections; "
+        "they do not establish storage or other dependency health." + _refs(refs),
+        "",
+        "## Recommendation",
+        "",
+        "- Consider a bounded HTTP readiness endpoint that checks dependencies required to "
+        "serve requests, with appropriate timeouts and failure thresholds.",
+        "- Review platform-generated default probes before changing configuration.",
+        "- HTTP probes alone do not prove dependency coverage; review the handler.",
+        "- Keep liveness independent of transient dependency outages to avoid restart loops.",
+        "",
+        "## Context",
+        "",
+        f"- **Incident key:** `{alert.incident_key}`",
+        "- This is a reliability suggestion, not a verified incident root cause.",
+        "- No application code or Azure resources were modified.",
+        "",
+        "## Evidence",
+        "",
+        *[
+            line
+            for item in report.evidence.items
+            if item.evidence_id in refs
+            for line in _evidence_samples(item)
+        ],
+    ]
+    body = redact_text("\n".join(lines) + "\n")
+    if len(body.encode()) > max_bytes:
+        # The recommendation and evidence references remain; only optional samples shrink.
+        body = redact_text(
+            "\n".join(lines[: lines.index("## Evidence")]) + "\n"
+            "_Evidence samples omitted to fit the size limit._\n"
+        )
+    if len(body.encode()) > max_bytes or not starts_with_marker(body, marker):
+        raise RenderError("improvement issue exceeds body budget")
+    return title, body

@@ -1,8 +1,9 @@
 # Durable worker
 
 The worker consumes normalized alerts from Service Bus. It investigates each incident at most once
-(per persisted report) and publishes or reconciles exactly one GitHub issue per incident, plus one
-recovery comment. Code: `src/azure_sre/worker/**` (runtime) and `src/azure_sre/state/**` (durable state).
+(per persisted report) and publishes or reconciles one incident issue, at most one separate
+probe-improvement issue, and one recovery comment on the incident issue.
+Code: `src/azure_sre/worker/**` (runtime) and `src/azure_sre/state/**` (durable state).
 
 ## Entry point
 
@@ -143,6 +144,34 @@ report is validated and checked for credential shapes and size before it is writ
     contain raw messages or exception text.
 
 ## Operator actions
+
+### Suggested probe improvements
+
+Health diagnostics classify explicit readiness probes, separately from liveness/startup.
+TCP readiness or a container with no explicit readiness produces a host-owned
+`suggested improvement` recommendation. HTTP readiness is not assumed to check dependencies;
+malformed/unavailable probe configuration does not produce a recommendation.
+
+After verifying the incident issue, the worker publishes the suggestion as a **separate
+issue in the same trusted repository**. `PublishRequest.purpose=probe_improvement` selects
+the fixed recommendation template. The issue cites health evidence and recommends reviewing
+bounded dependency-aware HTTP readiness without coupling liveness to dependency outages.
+It does not claim the probe limitation caused the incident or modify the application.
+
+The incident record's `improvement_*` fields form a separately bounded publication ledger:
+`pending` -> `writing` -> `published`, or `uncertain` -> reconciliation by
+`azure-sre:improvement:<incident-key>`. Intent is persisted under the existing ETag lease
+before creating the issue; restarts and redelivery cannot blindly recreate it.
+Deduplication is **per incident**, not across unrelated incidents. Recommendation exhaustion
+sets `improvement_state=operator_required` and a safe `improvement_reason` without losing
+the incident publication or blocking its later recovery comment. Test sinks never invoke
+the publisher for recommendations.
+
+Drain old worker replicas before deploying this version: older strict decoders do not
+recognize the new optional ledger fields. This version reads existing records with defaults;
+already-terminal incidents are not retroactively re-investigated or given recommendations.
+Use the same ETag-conditional operator workflow to re-arm a blocked recommendation, after
+checking its marker in GitHub; never blindly reset an uncertain write to `pending`.
 
 - `OPERATOR_REQUIRED` rows carry a safe `operator_reason`:
   - `fired_missing`

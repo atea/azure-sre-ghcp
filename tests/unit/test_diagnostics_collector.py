@@ -32,6 +32,9 @@ LAW = (
     "Microsoft.OperationalInsights/workspaces/law"
 )
 WS = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+STORAGE = (
+    f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.Storage/storageAccounts/shopdata"
+)
 KEY = "a" * 64
 NOW = datetime(2026, 10, 13, 6, 30, tzinfo=UTC)
 WINDOW = c.DiagnosticWindow(start=NOW - timedelta(minutes=20), end=NOW)
@@ -47,6 +50,7 @@ def registry() -> c.ApplicationRegistry:
                 environment="prod",
                 subscription_id=SUB,
                 container_app_id=APP,
+                storage_account_id=STORAGE,
                 app_insights_component_id=AI,
                 log_analytics_workspace_id=WS,
                 log_analytics_workspace_resource_id=LAW,
@@ -145,6 +149,58 @@ def test_workspace_queries_bind_ai_component_and_workspace_guid() -> None:
         assert "--timespan=" in " ".join(argv)
 
 
+def test_separate_app_insights_workspace_routes_only_ai_queries() -> None:
+    ai_ws = "99999999-7777-8888-9999-aaaaaaaaaaaa"
+    reg = registry()
+    mapping = reg.applications[0].model_dump()
+    mapping.update(app_insights_workspace_id=ai_ws, app_insights_workspace_resource_id=LAW)
+    reg = c.ApplicationRegistry(
+        schema_version=1, tenant_id=TENANT, applications=[c.ApplicationMapping(**mapping)]
+    )
+    runner = FakeRunner()
+    coll = DiagnosticsCollector(registry=reg, runner=runner, env={}, clock=lambda: NOW)
+    for kind in (
+        DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+        DiagnosticKind.APP_INSIGHTS_OPERATIONS,
+        DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+    ):
+        coll.collect("shop", kind, WINDOW)
+    assert f"--workspace={ai_ws}" in argv_of(runner, 0)
+    assert f"--workspace={ai_ws}" in argv_of(runner, 1)
+    assert f"--workspace={WS}" in argv_of(runner, 2)
+
+
+@pytest.mark.parametrize("linked", [LAW.upper(), LAW + "-other", None])
+def test_ai_configuration_checks_linkage(linked: str | None) -> None:
+    runner = FakeRunner(ok({"properties": {"WorkspaceResourceId": linked}}))
+    item = collector(runner).collect("shop", DiagnosticKind.APP_INSIGHTS_CONFIGURATION, WINDOW)
+    assert f"--ids={AI.lower()}" in argv_of(runner)
+    if linked == LAW.upper():
+        assert item.status is EvidenceStatus.OK
+    else:
+        assert item.status is EvidenceStatus.ERROR
+        assert item.error and "linkage" in item.error.message
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"app_insights_workspace_id": WS},
+        {"app_insights_workspace_resource_id": LAW},
+        {"app_insights_workspace_id": "invalid", "app_insights_workspace_resource_id": LAW},
+        {
+            "app_insights_workspace_id": WS,
+            "app_insights_workspace_resource_id": LAW.replace(SUB, TENANT),
+        },
+    ],
+)
+def test_invalid_ai_workspace_mapping_is_rejected(overrides: dict[str, str]) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        c.ApplicationMapping.model_validate(registry().applications[0].model_dump() | overrides)
+
+
 def test_container_log_queries_bind_container_app_not_ai_component() -> None:
     runner = FakeRunner()
     coll = collector(runner)
@@ -159,6 +215,38 @@ def test_container_log_queries_bind_container_app_not_ai_component() -> None:
         assert AI.lower() not in kql
         assert "containerappconsolelogs_cl" in kql or "containerappsystemlogs_cl" in kql
         assert "| take 101" in kql
+        assert f"--workspace={WS}" in argv
+        assert (
+            f"(_resourceid =~ '{APP.lower()}' or "
+            "(isempty(_resourceid) and containerappname_s =~ 'shop-api'))"
+        ) in kql
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [DiagnosticKind.CONTAINER_APP_CONSOLE_LOGS, DiagnosticKind.CONTAINER_APP_SYSTEM_LOGS],
+)
+def test_container_logs_with_empty_resource_id_keep_bounded_redacted_evidence(
+    kind: DiagnosticKind,
+) -> None:
+    runner = FakeRunner(
+        ok(
+            [
+                {
+                    "_ResourceId": "",
+                    "ContainerAppName_s": "shop-api",
+                    "Log_s": "Failed to resolve storage.table.core.windows.net",
+                    "Msg_s": "Probe failed",
+                    "untrusted": "not evidence",
+                }
+            ]
+        )
+    )
+    item = collector(runner).collect("shop", kind, WINDOW)
+    assert item.status is EvidenceStatus.OK
+    assert item.row_count == 1
+    assert "_ResourceId" not in item.rows[0]
+    assert "untrusted" not in item.rows[0]
 
 
 def test_activity_log_is_scoped_to_one_resource_not_subscription() -> None:
@@ -167,6 +255,26 @@ def test_activity_log_is_scoped_to_one_resource_not_subscription() -> None:
     argv = argv_of(runner)
     assert f"--resource-id={APP.lower()}" in argv
     assert not any(a.startswith("--resource-group") for a in argv)
+
+
+def test_console_error_summary_is_scoped_counted_and_sample_bounded() -> None:
+    runner = FakeRunner()
+    collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS, WINDOW)
+    query = kql_of(argv_of(runner))
+    assert "isempty(_ResourceId) and ContainerAppName_s =~ 'shop-api'" in query
+    assert "Failed to resolve" in query
+    assert "http_5xx" in query
+    assert "Occurrences=count()" in query
+    assert "substring(Log_s, 0, 1000)" in query
+    assert "| take 101" in query
+
+
+def test_console_error_samples_are_redacted() -> None:
+    token = "ghp_" + "A" * 36
+    runner = FakeRunner(ok([{"Log_s": f"Failed to resolve {token}", "Occurrences": 3}]))
+    item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS, WINDOW)
+    assert token not in item.model_dump_json()
+    assert item.rows[0]["Occurrences"] == 3
 
 
 def test_health_and_revisions_use_name_group_and_subscription_only() -> None:
@@ -245,6 +353,77 @@ def test_container_app_fields_are_projected_and_extras_dropped() -> None:
     item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_HEALTH, WINDOW)
     assert item.status is EvidenceStatus.OK
     assert "secretEnvValue" not in json.dumps(item.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize("account,match", [("shopdata", True), ("shopdat", False)])
+def test_health_compares_only_allowlisted_storage_setting(account: str, match: bool) -> None:
+    secret = "do-not-publish-this-value"
+    runner = FakeRunner(
+        ok(
+            {
+                "name": "shop-api",
+                "properties": {
+                    "template": {
+                        "containers": [
+                            {
+                                "env": [
+                                    {"name": "AZURE_STORAGE_ACCOUNT_NAME", "value": account},
+                                    {"name": "PASSWORD", "value": secret},
+                                    {"name": "CONNECTION_STRING", "secretRef": "private"},
+                                ]
+                            }
+                        ]
+                    }
+                },
+            }
+        )
+    )
+    item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_HEALTH, WINDOW)
+    assert item.rows[0]["storage.account_matches_registry"] is match
+    assert item.rows[0]["storage.expected_account"] == "shopdata"
+    assert secret not in item.model_dump_json()
+    assert "PASSWORD" not in item.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"name": "AZURE_STORAGE_ACCOUNT_NAME", "secretRef": "private"},
+        {"name": "AZURE_STORAGE_ACCOUNT_NAME", "value": "https://untrusted.invalid/"},
+    ],
+)
+def test_health_never_exposes_secret_refs_or_invalid_storage_names(entry: dict[str, str]) -> None:
+    runner = FakeRunner(
+        ok(
+            {
+                "name": "shop-api",
+                "properties": {"template": {"containers": [{"env": [entry]}]}},
+            }
+        )
+    )
+    item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_HEALTH, WINDOW)
+    assert item.rows[0]["storage.setting_status"] == "invalid_or_ambiguous"
+    assert "storage.configured_account" not in item.rows[0]
+    assert "untrusted.invalid" not in item.model_dump_json()
+    assert "private" not in item.model_dump_json()
+
+
+def test_storage_dependency_read_is_management_plane_only() -> None:
+    runner = FakeRunner(ok({"name": "shopdata", "id": STORAGE, "accessKeys": "secret"}))
+    item = collector(runner).collect("shop", DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION, WINDOW)
+    assert argv_of(runner)[:4] == ("az", "storage", "account", "show")
+    assert f"--ids={STORAGE.lower()}" in argv_of(runner)
+    assert "secret" not in item.model_dump_json()
+
+
+@pytest.mark.parametrize("resource", [APP, STORAGE.replace(SUB, TENANT)])
+def test_dependency_mapping_rejects_wrong_type_or_subscription(resource: str) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        c.ApplicationMapping.model_validate(
+            registry().applications[0].model_dump() | {"storage_account_id": resource}
+        )
 
 
 # Results and error mapping ---------------------------------------------------------------

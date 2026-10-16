@@ -196,6 +196,81 @@ def _empty_bundle() -> c.EvidenceBundle:
     return c.EvidenceBundle(incident_key=make_alert().incident_key, items=())
 
 
+def test_console_error_baseline_survives_sdk_failure(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        rows = (
+            (
+                {
+                    "ErrorKind": "dependency_dns",
+                    "Occurrences": 3,
+                    "Log_s": "Failed to resolve storage.table.core.windows.net",
+                },
+            )
+            if kind is DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS
+            else ({"n": 1},)
+        )
+        return make_item(rows=rows, kind=kind)
+
+    def fail(tools: Sequence[ToolSpec], prompt: str) -> str:
+        raise RuntimeError("SDK failed")
+
+    coll = FakeCollector(evidence)
+    report = run(make_investigator(coll, FakeBackend(fail), tmp_path), make_alert())
+    assert report.partial_category is PartialCategory.SDK_ERROR
+    assert [kind for _, kind, _ in coll.calls] == [
+        DiagnosticKind.CONTAINER_APP_HEALTH,
+        DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+        DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
+        DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+    ]
+    item = report.evidence.items[1]
+    assert item.rows[0]["Occurrences"] == 3
+    assert "Failed to resolve" in str(item.rows[0]["Log_s"])
+    assert TOKEN not in report.model_dump_json()
+
+
+def test_mismatched_ai_linkage_blocks_ai_queries(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION:
+            return make_item(rows=(), kind=kind, status=EvidenceStatus.ERROR)
+        return make_item(kind=kind)
+
+    async def script(tools: Sequence[ToolSpec], prompt: str) -> str:
+        outcome = await call_tool(tools, DiagnosticKind.APP_INSIGHTS_OPERATIONS)
+        assert not outcome.ok
+        return draft_json()
+
+    coll = FakeCollector(evidence)
+    report = run(make_investigator(coll, FakeBackend(script), tmp_path), make_alert())
+    assert report.status == "partial"
+    assert report.partial_category is PartialCategory.EVIDENCE_MISSING
+    assert report.draft is not None
+    assert all(
+        kind
+        not in (
+            DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+            DiagnosticKind.APP_INSIGHTS_OPERATIONS,
+        )
+        for _, kind, _ in coll.calls
+    )
+
+
+def test_registered_storage_dependency_is_in_host_baseline(tmp_path: Path) -> None:
+    from .test_diagnostics_collector import STORAGE
+
+    reg = registry(mapping(storage_account_id=STORAGE))
+    coll = FakeCollector()
+    report = run(
+        make_investigator(coll, FakeBackend(lambda tools, prompt: draft_json()), tmp_path, reg=reg),
+        make_alert(reg),
+    )
+    assert any(kind is DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION for _, kind, _ in coll.calls)
+    assert any(
+        item.provenance.source is c.EvidenceSource.STORAGE_ACCOUNT_CONFIGURATION
+        for item in report.evidence.items
+    )
+
+
 def test_temp_workspace_is_private_and_removed(tmp_path: Path) -> None:
     backend = FakeBackend(lambda tools, prompt: draft_json())
     run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())

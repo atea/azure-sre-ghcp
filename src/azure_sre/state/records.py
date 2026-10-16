@@ -106,12 +106,24 @@ class RecoveryState(StrEnum):
     OPERATOR_REQUIRED = "operator_required"
 
 
+class ImprovementState(StrEnum):
+    PENDING = "pending"
+    WRITING = "writing"
+    PUBLISHED = "published"
+    UNCERTAIN = "uncertain"
+    OPERATOR_REQUIRED = "operator_required"
+
+
 def issue_marker(key: str) -> str:
     return f"azure-sre:incident:{key}"
 
 
 def recovery_marker(key: str) -> str:
     return f"azure-sre:recovery:{key}"
+
+
+def improvement_marker(key: str) -> str:
+    return f"azure-sre:improvement:{key}"
 
 
 _CONFIG: Final = ConfigDict(extra="forbid", frozen=True, validate_assignment=True)
@@ -146,6 +158,12 @@ class IncidentRecord(BaseModel):
     recovery_done: bool = False
     recovery_blocked: bool = False
     operator_reason: SafeCode | None = None
+    improvement_state: ImprovementState | None = None
+    improvement_attempts: Count = 0
+    improvement_reconcile_attempts: Count = 0
+    improvement_intent_at: AwareDatetime | None = None
+    improvement_publication: PublicationRecord | None = None
+    improvement_reason: SafeCode | None = None
 
     @field_validator(
         "created_at",
@@ -153,6 +171,7 @@ class IncidentRecord(BaseModel):
         "lease_expires_at",
         "publish_intent_at",
         "next_attempt_at",
+        "improvement_intent_at",
     )
     @classmethod
     def _utc(cls, value: datetime | None) -> datetime | None:
@@ -214,12 +233,34 @@ class IncidentRecord(BaseModel):
             raise ValueError("publication record does not belong to incident")
         if (self.phase is IncidentPhase.OPERATOR_REQUIRED) != (self.operator_reason is not None):
             raise ValueError("operator_reason must be set exactly for operator_required")
+        if self.improvement_state is not None and not published:
+            raise ValueError("improvement requires a verified incident publication")
+        if (self.improvement_state is ImprovementState.PUBLISHED) != (
+            self.improvement_publication is not None
+        ):
+            raise ValueError("improvement publication required exactly when published")
+        if self.improvement_state in (ImprovementState.WRITING, ImprovementState.UNCERTAIN):
+            if self.improvement_intent_at is None:
+                raise ValueError("improvement write requires persisted intent")
+        if self.improvement_publication is not None and (
+            self.improvement_publication.incident_key != key
+            or self.improvement_publication.marker != improvement_marker(key)
+            or self.publication is None
+            or self.improvement_publication.repository != self.publication.repository
+        ):
+            raise ValueError("improvement publication mismatch")
         return self
 
     @property
     def is_active(self) -> bool:
         """Whether the reconciler still has work for this incident."""
         if self.phase not in TERMINAL_PHASES:
+            return True
+        if self.improvement_state in (
+            ImprovementState.PENDING,
+            ImprovementState.WRITING,
+            ImprovementState.UNCERTAIN,
+        ):
             return True
         return (
             self.phase in (IncidentPhase.PUBLISHED, IncidentPhase.PARTIAL_PUBLISHED)
@@ -310,9 +351,9 @@ def encode_incident(record: IncidentRecord) -> dict[str, Scalar]:
             if value is not None:
                 props[_JSON_FIELDS[name]] = _json_text(value)
             continue
-        if name == "publication":
+        if name in ("publication", "improvement_publication"):
             if value is not None:
-                props[_PUBLICATION_FIELD] = _json_text(value)
+                props[f"{name}_json"] = _json_text(value)
             continue
         encoded = _encode_value(value)
         if encoded is not None:
@@ -350,6 +391,10 @@ def decode_incident(partition_key: str, props: Mapping[str, Scalar]) -> Incident
                 data[reverse[name]] = NormalizedAlert.model_validate(_load_json(value))
             elif name == _PUBLICATION_FIELD:
                 data["publication"] = PublicationRecord.model_validate(_load_json(value))
+            elif name == "improvement_publication_json":
+                data["improvement_publication"] = PublicationRecord.model_validate(
+                    _load_json(value)
+                )
             elif name in IncidentRecord.model_fields:
                 data[name] = value
             else:

@@ -1,5 +1,18 @@
 # GitHub publication
 
+Incident issues include host-rendered collected evidence samples even when inference
+produces no valid draft. Each sample cites its evidence ID; at most three rows per item
+are shown, with bounded text and explicit omission notices. Telemetry remains escaped
+and redacted, and the existing UTF-8 issue budget and required Gaps section still apply.
+These samples are observations, not an inferred root-cause claim. Provenance includes
+categorized diagnostic error messages so linkage/permission gaps remain actionable.
+
+Probe recommendations use the same `publish`/`reconcile` interfaces with a host-owned
+`probe_improvement` purpose and a distinct improvement marker. They require positive
+health-configuration evidence, are verified by reading the created issue, and never share
+the incident's issue number. The fixed title starts with `[suggested improvement]`.
+No model controls the repository, marker, purpose, issue template or probe recommendation.
+
 `azure_sre.github.McpPublisher` implements `worker.protocols.Publisher`
 (`publish`, `reconcile`, `recover`, `reconcile_recovery`). The publisher is owned by
 the application and is **never connected to the model**. It drives the official

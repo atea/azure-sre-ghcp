@@ -17,6 +17,10 @@ from azure_sre.runtime.sdk_policy import (
 )
 
 DEFAULT_CACHE_SECONDS = 900
+# Lifetime reported to the SDK. The runtime rejects tokens with one hour or less remaining
+# and refreshes one hour before this value; fine-grained PATs last days, so the vault cache
+# TTL above (our re-read cadence) must not be reported as the token's lifetime.
+SDK_REPORTED_LIFETIME_SECONDS = 8 * 3600
 
 
 class PatAuthenticationError(RuntimeError):
@@ -72,9 +76,8 @@ class PatTokenProvider:
         token = await self.get_token(
             force_refresh=args.get("reason") == GitHubTokenAcquireReason.REFRESH
         )
-        remaining = max(1, int(self._cache_seconds - (self._clock() - self._loaded_at)))
         return {
             "kind": "token",
             "accessToken": token.get_secret_value(),
-            "expiresIn": remaining,
+            "expiresIn": SDK_REPORTED_LIFETIME_SECONDS,
         }

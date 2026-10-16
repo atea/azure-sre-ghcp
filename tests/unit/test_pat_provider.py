@@ -7,7 +7,11 @@ from azure_sre.__main__ import resolve_inference_settings
 from azure_sre.pipeline import build_inference_supplier
 from azure_sre.security.github_app import InstallationTokenProvider
 from azure_sre.security.key_vault import PatLoader
-from azure_sre.security.pat_provider import PatAuthenticationError, PatTokenProvider
+from azure_sre.security.pat_provider import (
+    SDK_REPORTED_LIFETIME_SECONDS,
+    PatAuthenticationError,
+    PatTokenProvider,
+)
 
 PAT = "github_pat_secretvalue"
 VAULT = "https://myvault.vault.azure.net/"
@@ -38,11 +42,17 @@ async def test_pat_is_cached_refreshed_and_reloaded_after_expiry() -> None:
 
     provider = PatTokenProvider(load_pat=load, cache_seconds=600, clock=clock)
     first = await provider.for_sdk(_args())
-    assert first == {"kind": "token", "accessToken": f"{PAT}1", "expiresIn": 600}
+    assert first == {
+        "kind": "token",
+        "accessToken": f"{PAT}1",
+        "expiresIn": SDK_REPORTED_LIFETIME_SECONDS,
+    }
+    # The SDK runtime rejects credentials with one hour or less remaining.
+    assert SDK_REPORTED_LIFETIME_SECONDS > 3600
     clock.now += 100
     second = await provider.for_sdk(_args())
     assert second["accessToken"] == f"{PAT}1"
-    assert second["expiresIn"] == 500
+    assert second["expiresIn"] == SDK_REPORTED_LIFETIME_SECONDS
     assert len(loads) == 1
 
     refreshed = await provider.for_sdk(_args(reason=GitHubTokenAcquireReason.REFRESH))

@@ -24,7 +24,11 @@ from azure_sre.investigation import (
     ToolOutcome,
     ToolSpec,
 )
-from azure_sre.investigation.investigator import AlertRejected, CopilotInvestigator, _QueryParams
+from azure_sre.investigation.investigator import (
+    AlertRejected,
+    CopilotInvestigator,
+    _QueryParams,
+)
 from azure_sre.investigation.prompt import build_prompt
 from azure_sre.runtime.sdk_policy import build_runtime_env
 from azure_sre.worker.protocols import InvestigationDeferred
@@ -563,6 +567,27 @@ def test_sdk_backend_requires_skip_cli_download(tmp_path: Path) -> None:
             extra_env={},
             initial_token_supplier=supplier,
         )
+
+
+async def test_sdk_backend_token_provider_accepts_sdk_origin_and_rejects_others(
+    tmp_path: Path,
+) -> None:
+    seen: list[str] = []
+
+    async def supplier(args: Any) -> Any:
+        seen.append(args["host"])
+        return {"kind": "token", "accessToken": "github_pat_x", "expiresIn": 60}
+
+    backend = SdkModelBackend(
+        runtime_path=str(tmp_path),
+        extra_env={"COPILOT_SKIP_CLI_DOWNLOAD": "1"},
+        initial_token_supplier=supplier,
+    )
+    args = {"host": "https://github.com", "session_id": "s", "reason": "initial"}
+    assert (await backend._token_provider(args))["kind"] == "token"  # type: ignore[arg-type]
+    with pytest.raises(PermissionError):
+        await backend._token_provider({**args, "host": "https://evil.example"})  # type: ignore[arg-type]
+    assert seen == ["https://github.com"]
 
 
 def test_scratch_root_must_exist(tmp_path: Path) -> None:

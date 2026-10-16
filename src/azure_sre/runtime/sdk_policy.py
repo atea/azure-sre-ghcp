@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from copilot import (
     CopilotClient,
@@ -62,6 +63,7 @@ INFERENCE_AUTH_MODES = ("pat", "app")
 DEFAULT_INFERENCE_AUTH_MODE = "pat"
 _ALWAYS_REJECTED_PREFIXES = ("ghp_", "gho_", "ghu_", "ghr_")
 _MODE_PREFIX = {"pat": PAT_TOKEN_PREFIX, "app": INSTALLATION_TOKEN_PREFIX}
+APPROVED_TOKEN_HOSTS = frozenset({"github.com", "api.github.com"})
 
 
 class PolicyError(ValueError):
@@ -133,6 +135,32 @@ def validate_inference_auth_mode(mode: str) -> str:
     if mode not in INFERENCE_AUTH_MODES:
         raise PolicyError(f"Inference auth mode must be one of {INFERENCE_AUTH_MODES}.")
     return mode
+
+
+def is_approved_token_host(host: object) -> bool:
+    """Return True only for github.com/api.github.com, as a bare host or bare HTTPS origin.
+
+    The SDK token callback reports the host as an origin such as ``https://github.com``.
+    Anything with userinfo, a port, a path, a query or a fragment is rejected.
+    """
+    if not isinstance(host, str) or not host or host != host.strip():
+        return False
+    if "://" not in host:
+        return host.lower() in APPROVED_TOKEN_HOSTS
+    try:
+        parts = urlsplit(host)
+        port = parts.port
+    except ValueError:
+        return False
+    return (
+        parts.scheme.lower() == "https"
+        and parts.hostname in APPROVED_TOKEN_HOSTS
+        and parts.netloc.lower() == parts.hostname
+        and port is None
+        and parts.path in ("", "/")
+        and not parts.query
+        and not parts.fragment
+    )
 
 
 def validate_inference_token(token: str, *, mode: str) -> str:

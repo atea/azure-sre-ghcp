@@ -13,7 +13,7 @@ from copilot import GitHubTokenProviderArgs, GitHubTokenProviderResult
 from copilot.generated.rpc import GitHubTokenAcquireReason
 from pydantic import BaseModel, ConfigDict, SecretStr
 
-from azure_sre.runtime.sdk_policy import validate_inference_token
+from azure_sre.runtime.sdk_policy import is_approved_token_host, validate_inference_token
 
 
 class AppAuthenticationError(RuntimeError):
@@ -91,7 +91,7 @@ class InstallationTokenProvider:
             return self._cached
 
     async def for_sdk(self, args: GitHubTokenProviderArgs) -> GitHubTokenProviderResult:
-        if args["host"] not in {"github.com", "api.github.com"}:
+        if not is_approved_token_host(args["host"]):
             raise AppAuthenticationError("SDK requested credentials for an unapproved GitHub host.")
         token = await self.get_token(
             force_refresh=args.get("reason") == GitHubTokenAcquireReason.REFRESH

@@ -62,6 +62,15 @@ async def test_pat_provider_rejects_unapproved_host_without_loading() -> None:
         await provider.for_sdk(_args(host="evil.example"))
 
 
+async def test_pat_provider_accepts_sdk_https_origin_host() -> None:
+    async def load() -> str:
+        return PAT
+
+    provider = PatTokenProvider(load_pat=load)
+    result = await provider.for_sdk(_args(host="https://github.com"))
+    assert result["accessToken"] == PAT
+
+
 @pytest.mark.parametrize("value", ["ghs_install", "ghp_classic", "gho_oauth", "", "garbage"])
 async def test_pat_provider_rejects_non_fine_grained_secret(value: str) -> None:
     async def load() -> str:

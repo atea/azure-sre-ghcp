@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 TokenSupplier = Callable[[GitHubTokenProviderArgs], Awaitable[GitHubTokenProviderResult]]
 ToolHandler = Callable[[Any], Awaitable["ToolOutcome"]]
 
-_APPROVED_TOKEN_HOSTS = frozenset({"github.com", "api.github.com"})
 _RATE_LIMIT_MARKERS = ("rate limit", "rate_limit", "429")
 
 
@@ -85,7 +84,7 @@ class SdkModelBackend:
         self._model = model
 
     async def _token_provider(self, args: GitHubTokenProviderArgs) -> GitHubTokenProviderResult:
-        if args["host"] not in _APPROVED_TOKEN_HOSTS:
+        if not sdk_policy.is_approved_token_host(args["host"]):
             raise PermissionError("credentials requested for an unapproved host")
         supplier = self._initial
         if args["reason"] == GitHubTokenAcquireReason.REFRESH and self._refresh is not None:

@@ -10,9 +10,12 @@ from copilot import GitHubTokenProviderArgs, GitHubTokenProviderResult
 from copilot.generated.rpc import GitHubTokenAcquireReason
 from pydantic import SecretStr
 
-from azure_sre.runtime.sdk_policy import PolicyError, validate_inference_token
+from azure_sre.runtime.sdk_policy import (
+    PolicyError,
+    is_approved_token_host,
+    validate_inference_token,
+)
 
-_APPROVED_HOSTS = frozenset({"github.com", "api.github.com"})
 DEFAULT_CACHE_SECONDS = 900
 
 
@@ -64,7 +67,7 @@ class PatTokenProvider:
             return self._cached
 
     async def for_sdk(self, args: GitHubTokenProviderArgs) -> GitHubTokenProviderResult:
-        if args["host"] not in _APPROVED_HOSTS:
+        if not is_approved_token_host(args["host"]):
             raise PatAuthenticationError("SDK requested credentials for an unapproved GitHub host.")
         token = await self.get_token(
             force_refresh=args.get("reason") == GitHubTokenAcquireReason.REFRESH

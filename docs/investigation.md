@@ -42,6 +42,13 @@ SdkModelBackend(
 4. The model may call one typed tool, `kind` plus a bounded `operation_id`. Scope, app, and time window are fixed by the host. Extra fields are rejected.
 5. Every tool call, including baseline and refused calls, counts against the shared budget: 12 calls, 5 minutes overall, 30 s per CLI call, 100 rows per query, 64 KiB of evidence.
 6. Model output must be JSON matching `ModelReportDraft`. It is redacted and then validated against the evidence refs.
+   `status` is host-owned: it is not in the model's response schema, and any `status` the
+   model sends is discarded. The host makes the report `complete` only when there are no
+   host or model gaps and the draft has at least one observation, symptom, or hypothesis.
+   Otherwise the report is `partial`. Its category is the run's primary failure, else the
+   highest-precedence category among host and model gaps, else the first gap's category
+   (`EVIDENCE_MISSING` for a draft with no findings). Model gaps therefore
+   never cause a supported diagnosis to be rejected.
 7. Failures become partial reports with a category: `TIMEOUT`, `SDK_ERROR`, `INVALID_REPORT`, `BUDGET_EXHAUSTED`, `EVIDENCE_MISSING`, or `PERMISSION_DENIED`.
    An `SDK_ERROR` also records a host gap `model session failed during <stage>: <reason>`.
    `stage` is `session_open` or `model_turn`. `reason` is a fixed code:

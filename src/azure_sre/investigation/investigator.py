@@ -78,7 +78,20 @@ def strict_response_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-_OUTPUT_SCHEMA: Final[dict[str, Any]] = strict_response_schema(ModelReportDraft.model_json_schema())
+# Fields the host decides; they are not part of the schema the model answers.
+_HOST_OWNED_FIELDS: Final = frozenset({"status"})
+
+
+def _model_reply_schema() -> dict[str, Any]:
+    schema = ModelReportDraft.model_json_schema()
+    schema["properties"] = {
+        key: value for key, value in schema["properties"].items() if key not in _HOST_OWNED_FIELDS
+    }
+    schema["required"] = [key for key in schema.get("required", ()) if key in schema["properties"]]
+    return schema
+
+
+_OUTPUT_SCHEMA: Final[dict[str, Any]] = strict_response_schema(_model_reply_schema())
 # Most to least specific: the first category found among the host gaps wins.
 _PRECEDENCE: Final = (
     PartialCategory.BUDGET_EXHAUSTED,
@@ -445,8 +458,11 @@ class CopilotInvestigator:
         if not isinstance(parsed, Mapping):
             ctx.mark(PartialCategory.INVALID_REPORT)
             return None
+        # Status is host-owned: validate the reply as a draft and decide status in _report.
+        document = {key: value for key, value in parsed.items() if key not in _HOST_OWNED_FIELDS}
+        document["status"] = "partial"
         try:
-            return validate_model_output(dict(redact_value(parsed)), bundle)
+            return validate_model_output(dict(redact_value(document)), bundle)
         except ValueError:
             ctx.mark(PartialCategory.INVALID_REPORT)
             return None
@@ -465,9 +481,13 @@ class CopilotInvestigator:
                     )
                 )
         draft = self._draft(ctx, bundle)
-        present = {gap.category for gap in gaps}
+        # The host decides status: any host or model gap makes the report partial.
+        all_gaps = [*gaps, *(draft.gaps if draft is not None else ())]
+        present = {gap.category for gap in all_gaps}
         category = ctx.primary or next((c for c in _PRECEDENCE if c in present), None)
-        if category is None and draft is not None and draft.status == "partial":
+        if category is None and all_gaps:
+            category = all_gaps[0].category
+        if category is None and draft is not None and not draft.has_findings():
             category = PartialCategory.EVIDENCE_MISSING
         status: Literal["complete", "partial"] = "partial" if category is not None else "complete"
         if draft is not None and draft.status != status:

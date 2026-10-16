@@ -242,7 +242,8 @@ def test_prompt_carries_host_findings_as_untrusted_data_with_reasoning_rules() -
     assert "storage_account_dns_failure" not in rules
     assert "supported hypothesis" in rules
     assert "does not make a supported hypothesis unverified" in rules
-    assert "Set status to complete when a supported hypothesis explains" in rules
+    assert "The host decides whether the report is complete" in rules
+    assert "gaps never prevent a supported hypothesis" in rules
 
 
 def test_prompt_has_empty_host_findings_without_evidence() -> None:

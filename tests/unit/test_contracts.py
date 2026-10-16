@@ -578,7 +578,7 @@ def test_partial_report_with_gap_referencing_failed_evidence() -> None:
         draft(repository="evil/repo"),
         draft(sink="test"),
         draft(gaps=[{"description": "gap", "category": "timeout"}]),
-        draft(symptoms=[], observations=[]),
+        draft(symptoms=[], observations=[], hypotheses=[]),
         draft(observations=[{"text": "no refs", "evidence_refs": []}]),
     ],
 )
@@ -658,7 +658,7 @@ def test_host_partial_without_draft_accepts_failed_evidence_gap() -> None:
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"symptoms": [], "observations": []},
+        {"symptoms": [], "observations": [], "hypotheses": []},
         {"gaps": [{"description": "gap", "category": "timeout", "evidence_refs": ["E1"]}]},
     ],
 )

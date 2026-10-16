@@ -1229,14 +1229,18 @@ class ModelReportDraft(StrictModel):
     def all_refs(self) -> frozenset[str]:
         return frozenset(ref for _, refs, _ in self.ref_groups() for ref in refs)
 
+    def has_findings(self) -> bool:
+        return bool(self.observations or self.symptoms or self.hypotheses)
+
     @model_validator(mode="after")
     def _complete_rules(self) -> Self:
         if self.status == "complete":
             if self.gaps:
                 raise ContractError("invalid_report", "complete report must not declare gaps")
-            if not self.observations and not self.symptoms:
+            if not self.has_findings():
                 raise ContractError(
-                    "invalid_report", "complete report requires at least one observation or symptom"
+                    "invalid_report",
+                    "complete report requires an observation, symptom or hypothesis",
                 )
         return self
 

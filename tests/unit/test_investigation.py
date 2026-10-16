@@ -660,6 +660,7 @@ def test_output_schema_is_strict_structured_output_compatible() -> None:
         assert node["required"] == list(node["properties"])
         assert node["additionalProperties"] is False
     assert "gaps" in _OUTPUT_SCHEMA["required"]
+    assert "status" not in _OUTPUT_SCHEMA["properties"]
     # Host validation still accepts drafts that omit defaulted collections.
     assert c.ModelReportDraft.model_validate({"status": "partial", "summary": "s"}).gaps == ()
 
@@ -789,3 +790,56 @@ def test_unverified_hypothesis_with_gap_stays_inconclusive(tmp_path: Path) -> No
     )
     assert report.status == "partial" and report.draft is not None
     assert report.conclusion == "inconclusive"
+
+
+def test_supported_cause_with_model_gaps_is_kept_not_rejected(tmp_path: Path) -> None:
+    """Regression: a supported cause plus unrelated gaps used to be rejected as complete."""
+
+    reply = draft_json(
+        status="complete",
+        hypotheses=[
+            {
+                "statement": "The storage host does not resolve.",
+                "support_refs": ["E2"],
+                "contradiction_refs": [],
+                "verdict": "supported",
+            }
+        ],
+        gaps=[
+            {
+                "description": "App Insights linkage unavailable.",
+                "category": "evidence_missing",
+                "evidence_refs": [],
+            }
+        ],
+    )
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: reply), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is not None
+    assert report.status == "partial"
+    assert report.partial_category is PartialCategory.EVIDENCE_MISSING
+    assert report.conclusion == "conclusive"
+
+
+def test_model_status_is_ignored_and_host_decides(tmp_path: Path) -> None:
+    hedged = draft_json(status="partial")
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: hedged), tmp_path),
+        make_alert(),
+    )
+    assert report.status == "complete"
+    assert report.draft is not None and report.draft.status == "complete"
+
+
+def test_model_gap_alone_makes_report_partial(tmp_path: Path) -> None:
+    gap = {"description": "No traces.", "category": "evidence_missing", "evidence_refs": []}
+    report = run(
+        make_investigator(
+            FakeCollector(), FakeBackend(lambda t, p: draft_json(gaps=[gap])), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.status == "partial"
+    assert report.partial_category is PartialCategory.EVIDENCE_MISSING

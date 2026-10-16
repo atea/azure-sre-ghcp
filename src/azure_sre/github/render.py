@@ -26,6 +26,7 @@ from azure_sre.contracts import (
     ReportGap,
     incident_window,
 )
+from azure_sre.github.recommendations import probe_recommendation_refs
 from azure_sre.security.redaction import redact_text
 
 __all__ = [
@@ -40,7 +41,7 @@ __all__ = [
 ]
 
 MAX_TITLE_CHARS: Final = 256
-_MARKER_RE: Final = re.compile(r"^azure-sre:(?:incident|recovery):[0-9a-f]{64}$")
+_MARKER_RE: Final = re.compile(r"^azure-sre:(?:incident|recovery|improvement):[0-9a-f]{64}$")
 _URL_SCHEME_RE: Final = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,30}):(/{1,})")
 _WWW_RE: Final = re.compile(r"(?i)\bwww\.")
 _MD_SPECIALS: Final = frozenset("\\`*_{}[]()#!|~")
@@ -397,3 +398,62 @@ def render_recovery_comment(resolved: NormalizedAlert, *, marker: str, max_bytes
     if not starts_with_marker(body, marker) or len(body.encode("utf-8")) > max_bytes:
         raise RenderError("recovery comment failed final checks")
     return body
+
+
+def render_probe_improvement(
+    alert: NormalizedAlert,
+    report: InvestigationReport,
+    *,
+    marker: str,
+    max_bytes: int,
+) -> tuple[str, str]:
+    refs = probe_recommendation_refs(report)
+    if not refs:
+        raise RenderError("no host-verified probe recommendation")
+    title = (
+        f"[suggested improvement] {alert.app_id} ({alert.environment}): "
+        "review dependency-aware readiness probes"
+    )
+    lines = [
+        marker_comment(marker),
+        "",
+        "## Suggested improvement",
+        "",
+        f"Review readiness probes for `{alert.app_id}` (`{alert.environment}`).",
+        "Collected configuration shows TCP readiness probes or containers without explicit "
+        "readiness probes. TCP probes establish only that a port accepts connections; "
+        "they do not establish storage or other dependency health." + _refs(refs),
+        "",
+        "## Recommendation",
+        "",
+        "- Consider a bounded HTTP readiness endpoint that checks dependencies required to "
+        "serve requests, with appropriate timeouts and failure thresholds.",
+        "- Review platform-generated default probes before changing configuration.",
+        "- HTTP probes alone do not prove dependency coverage; review the handler.",
+        "- Keep liveness independent of transient dependency outages to avoid restart loops.",
+        "",
+        "## Context",
+        "",
+        f"- **Incident key:** `{alert.incident_key}`",
+        "- This is a reliability suggestion, not a verified incident root cause.",
+        "- No application code or Azure resources were modified.",
+        "",
+        "## Evidence",
+        "",
+        *[
+            line
+            for item in report.evidence.items
+            if item.evidence_id in refs
+            for line in _evidence_samples(item)
+        ],
+    ]
+    body = redact_text("\n".join(lines) + "\n")
+    if len(body.encode()) > max_bytes:
+        # The recommendation and evidence references remain; only optional samples shrink.
+        body = redact_text(
+            "\n".join(lines[: lines.index("## Evidence")]) + "\n"
+            "_Evidence samples omitted to fit the size limit._\n"
+        )
+    if len(body.encode()) > max_bytes or not starts_with_marker(body, marker):
+        raise RenderError("improvement issue exceeds body budget")
+    return title, body

@@ -469,3 +469,37 @@ def project_storage_setting(
         out["storage.expected_account"] = expected
         out["storage.account_matches_registry"] = account == expected
     return out
+
+
+def project_probe_assessment(source: Mapping[str, Any]) -> dict[str, str | int | bool]:
+    """Describe explicit probes without treating a listening port as dependency health."""
+    properties = source.get("properties")
+    template = properties.get("template") if isinstance(properties, Mapping) else None
+    containers = template.get("containers") if isinstance(template, Mapping) else None
+    if not isinstance(containers, list) or not containers:
+        return {"probes.assessment": "unknown"}
+    tcp = http = absent = 0
+    for container in containers:
+        if not isinstance(container, Mapping):
+            return {"probes.assessment": "unknown"}
+        probes = container.get("probes", [])
+        if not isinstance(probes, list) or any(not isinstance(p, Mapping) for p in probes):
+            return {"probes.assessment": "unknown"}
+        readiness = [p for p in probes if p.get("type") == "Readiness"]
+        if not readiness:
+            absent += 1
+        for probe in readiness:
+            if isinstance(probe.get("httpGet"), Mapping):
+                http += 1
+            elif isinstance(probe.get("tcpSocket"), Mapping):
+                tcp += 1
+            else:
+                return {"probes.assessment": "unknown"}
+    recommend = tcp > 0 or absent > 0
+    return {
+        "probes.assessment": "review_readiness" if recommend else "http_readiness_configured",
+        "probes.tcp_readiness_count": tcp,
+        "probes.http_readiness_count": http,
+        "probes.containers_without_explicit_readiness": absent,
+        "probes.suggest_dependency_readiness": recommend,
+    }

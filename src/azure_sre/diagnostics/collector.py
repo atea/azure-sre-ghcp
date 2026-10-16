@@ -30,6 +30,7 @@ from azure_sre.diagnostics.templates import (
     DiagnosticKind,
     QueryContext,
     TemplateError,
+    project_probe_assessment,
     project_row,
     project_storage_setting,
 )
@@ -315,6 +316,7 @@ class DiagnosticsCollector:
                 )
             if kind is DiagnosticKind.CONTAINER_APP_HEALTH:
                 projected.update(project_storage_setting(raw, mapping))
+                projected.update(project_probe_assessment(raw))
             rows.append(redact_value(projected))
         if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION and rows:
             expected = (

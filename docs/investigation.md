@@ -43,6 +43,18 @@ SdkModelBackend(
    `authentication`, `response_schema`, `model_unavailable`, `model_request_rejected`,
    `runtime_unavailable`, or `unclassified`. The code is derived from the exception type and
    message, but the message itself is never stored or logged.
+8. The host derives `host_findings` from OK evidence only, with no model involvement
+   (`investigation/findings.py`). The codes are:
+   - `storage_account_registry_mismatch`: the configured storage account differs from the
+     registered `storage_account_id`.
+   - `storage_account_dns_failure`: a DNS failure for
+     `<configured account>.<blob|table|queue|file|dfs>.core.windows.net`.
+   - `dependency_dns_failure`: up to 3 other hosts that failed DNS resolution.
+   - `http_5xx_with_dependency_failure`: a revision logged 5xx responses alongside DNS
+     failures.
+   Values must match strict patterns before they reach finding text. Findings are kept even
+   when the model session fails, so a partial report can still name the likely cause.
+   `InvestigationReport` rejects findings that cite missing or non-OK evidence.
 
 ### SDK contract notes
 

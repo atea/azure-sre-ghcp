@@ -314,6 +314,10 @@ async def test_dns_failure_survives_sdk_error_and_publishes_separate_probe_sugge
     incident = next(i for i in p.github.issues.values() if issue_marker(key) in i["body"])
     suggestion = next(i for i in p.github.issues.values() if improvement_marker(key) in i["body"])
     assert "sdk_error" in incident["body"]
+    assert "## Host-verified findings" in incident["body"]
+    assert 'registered dependency is "shopdata"' in incident["body"]
+    assert 'configured storage account "shopdat" failed DNS' in incident["body"]
+    assert "most likely does not exist" in incident["body"]
     assert "Failed to resolve shopdat.table.core.windows.net" in incident["body"]
     assert "shopdata" in incident["body"] and "shopdat" in incident["body"]
     assert "storage.account\\_matches\\_registry" in incident["body"]

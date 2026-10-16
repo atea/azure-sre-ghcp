@@ -243,6 +243,11 @@ def render_issue_body(
     ]
     if draft is not None:
         summaries = [escape_inline(draft.summary, n) for n in (1000, 280, 80)]
+    elif report.host_findings:
+        summaries = [
+            "_No model diagnosis was produced; see the host-verified findings below. "
+            "This is a host-generated partial report._"
+        ]
     else:
         summaries = ["_No diagnosis was produced; this is a host-generated partial report._"]
 
@@ -255,6 +260,11 @@ def render_issue_body(
         )
 
     sections = {
+        "findings": _Section(
+            "Host-verified findings",
+            [f"- {escape_inline(f.text)}{_refs(f.evidence_refs)}" for f in report.host_findings],
+            "_No deterministic findings._",
+        ),
         "symptoms": _Section(
             "Symptoms",
             [
@@ -318,6 +328,7 @@ def render_issue_body(
 
     def compose() -> str:
         lines = [marker_line, "", *banner, "## Summary", "", summaries[state["summary"]], ""]
+        lines += sections["findings"].render(budget_label)
         lines += alert_lines
         order = ("symptoms", "timeline", "observations", "hypotheses")
         for key in order:
@@ -342,6 +353,7 @@ def render_issue_body(
 
     # Optional items in priority order; each section keeps its leading items.
     for key in (
+        "findings",
         "samples",
         "hypotheses",
         "observations",

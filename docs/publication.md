@@ -110,7 +110,8 @@ The body has a fixed host layout:
 
 - Line 1 is exactly `<!-- azure-sre:incident:<sha256> -->`.
 - A WARNING banner follows when the report is partial.
-- Then the sections, in order: **Summary**, **Alert** (trusted identity, severity,
+- Then the sections, in order: **Summary**, **Host-verified findings** (deterministic
+  findings with evidence ids), **Alert** (trusted identity, severity,
   signal, fired time, window, rule, alert id, incident key), **Symptoms**, **Timeline**,
   **Observations**, **Hypotheses** (supported / contradicted / unverified, with evidence
   ids), **Gaps**, **Evidence provenance**, **Developer actions** (checkboxes), and a

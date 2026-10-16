@@ -36,6 +36,7 @@ from azure_sre.diagnostics.collector import CorrelationSelector, DiagnosticsErro
 from azure_sre.diagnostics.templates import DiagnosticKind
 from azure_sre.investigation.backend import ModelBackend, ModelSession, ToolOutcome, ToolSpec
 from azure_sre.investigation.budget import BudgetRefused, CallLedger, EvidenceLedger
+from azure_sre.investigation.findings import derive_host_findings
 from azure_sre.investigation.prompt import build_prompt
 from azure_sre.security.redaction import redact_text, redact_value
 from azure_sre.worker.messages import PoisonMessage, bind_alert
@@ -483,6 +484,7 @@ class CopilotInvestigator:
             evidence=bundle,
             draft=draft,
             host_gaps=tuple(gaps),
+            host_findings=derive_host_findings(bundle),
         )
 
 

@@ -159,6 +159,38 @@ def test_container_log_queries_bind_container_app_not_ai_component() -> None:
         assert AI.lower() not in kql
         assert "containerappconsolelogs_cl" in kql or "containerappsystemlogs_cl" in kql
         assert "| take 101" in kql
+        assert f"--workspace={WS}" in argv
+        assert (
+            f"(_resourceid =~ '{APP.lower()}' or "
+            "(isempty(_resourceid) and containerappname_s =~ 'shop-api'))"
+        ) in kql
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [DiagnosticKind.CONTAINER_APP_CONSOLE_LOGS, DiagnosticKind.CONTAINER_APP_SYSTEM_LOGS],
+)
+def test_container_logs_with_empty_resource_id_keep_bounded_redacted_evidence(
+    kind: DiagnosticKind,
+) -> None:
+    runner = FakeRunner(
+        ok(
+            [
+                {
+                    "_ResourceId": "",
+                    "ContainerAppName_s": "shop-api",
+                    "Log_s": "Failed to resolve storage.table.core.windows.net",
+                    "Msg_s": "Probe failed",
+                    "untrusted": "not evidence",
+                }
+            ]
+        )
+    )
+    item = collector(runner).collect("shop", kind, WINDOW)
+    assert item.status is EvidenceStatus.OK
+    assert item.row_count == 1
+    assert "_ResourceId" not in item.rows[0]
+    assert "untrusted" not in item.rows[0]
 
 
 def test_activity_log_is_scoped_to_one_resource_not_subscription() -> None:

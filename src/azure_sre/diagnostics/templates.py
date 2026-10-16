@@ -191,7 +191,7 @@ def _operations_argv(ctx: QueryContext) -> tuple[str, ...]:
 def _console_logs_argv(ctx: QueryContext) -> tuple[str, ...]:
     kql = (
         f"ContainerAppConsoleLogs_CL | where {_kql_time_filter(ctx.window)} "
-        f"| where _ResourceId =~ {_kql_string(_container_app_id(ctx.mapping))} "
+        f"| where {_container_log_scope(ctx.mapping)} "
         "| order by TimeGenerated desc "
         "| project TimeGenerated, RevisionName_s, ContainerName_s, Stream_s, Log_s "
         f"| take {ctx.row_limit + 1}"
@@ -202,12 +202,23 @@ def _console_logs_argv(ctx: QueryContext) -> tuple[str, ...]:
 def _system_logs_argv(ctx: QueryContext) -> tuple[str, ...]:
     kql = (
         f"ContainerAppSystemLogs_CL | where {_kql_time_filter(ctx.window)} "
-        f"| where _ResourceId =~ {_kql_string(_container_app_id(ctx.mapping))} "
+        f"| where {_container_log_scope(ctx.mapping)} "
         "| order by TimeGenerated desc "
         "| project TimeGenerated, RevisionName_s, Reason_s, Type_s, Msg_s "
         f"| take {ctx.row_limit + 1}"
     )
     return _log_query_argv(ctx, kql)
+
+
+def _container_log_scope(mapping: ApplicationMapping) -> str:
+    name, _, _ = _container_app_parts(mapping)
+    resource = _kql_string(_container_app_id(mapping))
+    # The registry assigns this workspace to one application. Never fall back for a
+    # conflicting resource ID, even when the row advertises the expected app name.
+    return (
+        f"(_ResourceId =~ {resource} or "
+        f"(isempty(_ResourceId) and ContainerAppName_s =~ {_kql_string(name)}))"
+    )
 
 
 def _activity_argv(ctx: QueryContext) -> tuple[str, ...]:
@@ -289,14 +300,14 @@ TEMPLATES: Final[Mapping[DiagnosticKind, Template]] = {
     ),
     DiagnosticKind.CONTAINER_APP_CONSOLE_LOGS: Template(
         kind=DiagnosticKind.CONTAINER_APP_CONSOLE_LOGS,
-        template_id="aca-console-logs-v1",
+        template_id="aca-console-logs-v2",
         fields=("TimeGenerated", "RevisionName_s", "ContainerName_s", "Stream_s", "Log_s"),
         supports_operation_id=False,
         build_argv=_console_logs_argv,
     ),
     DiagnosticKind.CONTAINER_APP_SYSTEM_LOGS: Template(
         kind=DiagnosticKind.CONTAINER_APP_SYSTEM_LOGS,
-        template_id="aca-system-logs-v1",
+        template_id="aca-system-logs-v2",
         fields=("TimeGenerated", "RevisionName_s", "Reason_s", "Type_s", "Msg_s"),
         supports_operation_id=False,
         build_argv=_system_logs_argv,

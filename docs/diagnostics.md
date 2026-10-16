@@ -54,13 +54,19 @@ Fixed templates only (`TEMPLATES`). Every KQL query is bound to its resource and
 | Container app health | `az containerapp show` | name, resource group |
 | Container app revisions | `az containerapp revision list` | name, resource group |
 | AI exceptions / operations | `az monitor log-analytics query --workspace <GUID>` | `AppExceptions` / `AppRequests`+`AppDependencies` filtered by AI component `_ResourceId` and time |
-| Console / system logs | `az monitor log-analytics query --workspace <GUID>` | `ContainerAppConsoleLogs_CL` / `ContainerAppSystemLogs_CL` filtered by Container App `_ResourceId` and time |
+| Console / system logs | `az monitor log-analytics query --workspace <GUID>` | `ContainerAppConsoleLogs_CL` / `ContainerAppSystemLogs_CL` filtered by Container App `_ResourceId` and time; empty IDs fall back to trusted `ContainerAppName_s` within the application-owned workspace |
 | Deployments | `az monitor activity-log list --resource-id <ARM ID>` | one resource ID, `--start-time` / `--end-time` |
 
 The AI component (`_ResourceId` for AI tables) and the Container App (`_ResourceId` for
 container logs) are kept separate. Each query takes at most 101 rows: 100 are kept, and an
 extra row marks the result as truncated. The server limit is only a hint, so the host also
 truncates.
+
+Container log templates v2 accept an empty `_ResourceId` only when `ContainerAppName_s`
+matches the registry application name. Non-empty conflicting IDs are never accepted.
+The workspace must be dedicated to this application (as required by registry ownership);
+do not configure this fallback against a workspace containing identically named apps from
+different Container Apps environments.
 
 ## Row projection
 

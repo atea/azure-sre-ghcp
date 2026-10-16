@@ -137,6 +137,7 @@ class _RunContext:
     raw: str | None = None
     deferred: InvestigationDeferred | None = None
     ai_link_verified: bool = False
+    model_stage: str = "start"
 
     def mark(self, category: PartialCategory) -> None:
         if self.primary is None:
@@ -238,6 +239,7 @@ class CopilotInvestigator:
             async with asyncio.timeout(self._budget.investigation_seconds):
                 await self._baseline(ctx)
                 if not ctx.stopped:
+                    ctx.model_stage = "session_open"
                     session = await self._backend.open(self._tool_specs(ctx), root)
                     if ctx.remaining() <= 0:
                         ctx.mark(PartialCategory.TIMEOUT)
@@ -246,14 +248,25 @@ class CopilotInvestigator:
                             incident_key=ctx.alert.incident_key, items=ctx.ledger.items
                         )
                         prompt = build_prompt(ctx.alert, bundle)
+                        ctx.model_stage = "model_turn"
                         ctx.raw = await session.send(prompt, _OUTPUT_SCHEMA, ctx.remaining())
         except TimeoutError:
             ctx.mark(PartialCategory.TIMEOUT)
         except InvestigationDeferred as exc:
             ctx.deferred = exc
         except Exception as exc:  # noqa: BLE001 - any SDK/transport failure degrades to a partial report
-            logger.warning("investigation sdk error: %s", type(exc).__name__)
+            reason = classify_sdk_failure(exc)
+            logger.warning(
+                "investigation sdk error: stage=%s reason=%s type=%s",
+                ctx.model_stage,
+                reason,
+                type(exc).__name__,
+            )
             ctx.mark(PartialCategory.SDK_ERROR)
+            ctx.gap(
+                f"model session failed during {ctx.model_stage}: {reason}",
+                PartialCategory.SDK_ERROR,
+            )
         finally:
             ctx.cancel.set()
             ctx.stopped = True
@@ -471,6 +484,30 @@ class CopilotInvestigator:
             draft=draft,
             host_gaps=tuple(gaps),
         )
+
+
+_SDK_FAILURE_RULES: Final = (
+    ("authentication", ("token provider", "credential", "unauthorized", "401", "403")),
+    ("response_schema", ("response_format", "invalid schema")),
+    ("model_unavailable", ("model not", "unknown model", "unsupported model", "model is not")),
+    ("model_request_rejected", ("execution failed", "400", "bad request")),
+)
+_SDK_AUTH_TYPES: Final = frozenset(
+    {"PatAuthenticationError", "AppAuthenticationError", "PermissionError"}
+)
+
+
+def classify_sdk_failure(exc: BaseException) -> str:
+    """Map an SDK failure to a fixed reason code. The exception text is never retained."""
+    if type(exc).__name__ in _SDK_AUTH_TYPES:
+        return "authentication"
+    text = str(exc).lower()
+    for reason, markers in _SDK_FAILURE_RULES:
+        if any(marker in text for marker in markers):
+            return reason
+    if isinstance(exc, OSError | ConnectionError):
+        return "runtime_unavailable"
+    return "unclassified"
 
 
 def _item_category(item: EvidenceItem) -> PartialCategory:

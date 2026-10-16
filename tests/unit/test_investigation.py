@@ -29,6 +29,7 @@ from azure_sre.investigation.investigator import (
     AlertRejected,
     CopilotInvestigator,
     _QueryParams,
+    classify_sdk_failure,
 )
 from azure_sre.investigation.prompt import build_prompt
 from azure_sre.runtime.sdk_policy import build_runtime_env
@@ -487,6 +488,54 @@ def test_session_error_is_sdk_partial(tmp_path: Path) -> None:
     report = run(make_investigator(FakeCollector(), FakeBackend(fail), tmp_path), make_alert())
     assert report.status == "partial"
     assert report.partial_category is PartialCategory.SDK_ERROR
+
+
+def _sdk_gaps(report: c.InvestigationReport) -> list[str]:
+    return [g.description for g in report.host_gaps if g.category is PartialCategory.SDK_ERROR]
+
+
+def test_model_turn_failure_records_categorized_reason_without_exception_text(
+    tmp_path: Path,
+) -> None:
+    def fail(tools: Sequence[ToolSpec], prompt: str) -> str:
+        raise RuntimeError(
+            f"Session error: Execution failed: 400 Invalid schema for response_format {TOKEN}"
+        )
+
+    report = run(make_investigator(FakeCollector(), FakeBackend(fail), tmp_path), make_alert())
+    assert _sdk_gaps(report) == ["model session failed during model_turn: response_schema"]
+    assert TOKEN not in report.model_dump_json()
+    assert "Invalid schema" not in report.model_dump_json()
+
+
+def test_session_open_failure_records_stage_and_authentication_reason(tmp_path: Path) -> None:
+    class FailingOpen(FakeBackend):
+        async def open(self, tools: Sequence[ToolSpec], root: Path) -> FakeSession:
+            raise RuntimeError(
+                "Request session.create failed: GitHub token provider callback failed"
+            )
+
+    backend = FailingOpen(lambda t, p: draft_json())
+    report = run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    assert report.partial_category is PartialCategory.SDK_ERROR
+    assert _sdk_gaps(report) == ["model session failed during session_open: authentication"]
+
+
+@pytest.mark.parametrize(
+    ("exc", "reason"),
+    [
+        (PermissionError("x"), "authentication"),
+        (RuntimeError("returned a credential with 899 seconds remaining"), "authentication"),
+        (RuntimeError("HTTP 401 Unauthorized"), "authentication"),
+        (RuntimeError("Invalid schema for response_format 'response'"), "response_schema"),
+        (RuntimeError("unknown model 'gpt-x'"), "model_unavailable"),
+        (RuntimeError("Execution failed: 400"), "model_request_rejected"),
+        (ConnectionResetError("reset"), "runtime_unavailable"),
+        (RuntimeError("something else"), "unclassified"),
+    ],
+)
+def test_sdk_failure_classification(exc: BaseException, reason: str) -> None:
+    assert classify_sdk_failure(exc) == reason
 
 
 def test_cleanup_error_is_explicit_gap_not_swallowed(tmp_path: Path) -> None:

@@ -38,6 +38,23 @@ SdkModelBackend(
 5. Every tool call, including baseline and refused calls, counts against the shared budget: 12 calls, 5 minutes overall, 30 s per CLI call, 100 rows per query, 64 KiB of evidence.
 6. Model output must be JSON matching `ModelReportDraft`. It is redacted and then validated against the evidence refs.
 7. Failures become partial reports with a category: `TIMEOUT`, `SDK_ERROR`, `INVALID_REPORT`, `BUDGET_EXHAUSTED`, `EVIDENCE_MISSING`, or `PERMISSION_DENIED`.
+   An `SDK_ERROR` also records a host gap `model session failed during <stage>: <reason>`.
+   `stage` is `session_open` or `model_turn`. `reason` is a fixed code:
+   `authentication`, `response_schema`, `model_unavailable`, `model_request_rejected`,
+   `runtime_unavailable`, or `unclassified`. The code is derived from the exception type and
+   message, but the message itself is never stored or logged.
+
+### SDK contract notes
+
+- The token callback receives the host as an HTTPS origin (`https://github.com`).
+  `sdk_policy.is_approved_token_host` accepts only that origin or the bare approved host.
+- `expiresIn` must be the token's real remaining lifetime and must exceed 3600 seconds.
+  PAT mode reports 8 hours. GitHub App installation tokens live at most one hour, so `app`
+  inference mode cannot satisfy this SDK version's preflight check.
+- Structured output is strict: `_OUTPUT_SCHEMA` lists every property as required and has no
+  `default` keywords. Replies are still validated against `ModelReportDraft`.
+- The `smoke live` gate passes the token directly to the client, not through the session
+  token provider, so it does not exercise these callback rules.
 
 ## Cancellation
 

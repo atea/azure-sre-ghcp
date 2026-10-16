@@ -458,7 +458,7 @@ def test_invalid_json_output_is_invalid_report_partial(tmp_path: Path) -> None:
     assert report.draft is None
 
 
-def test_unknown_evidence_ref_is_rejected(tmp_path: Path) -> None:
+def test_unknown_evidence_ref_is_salvaged_as_unverified_hypothesis(tmp_path: Path) -> None:
     bad = draft_json(
         observations=[{"text": "Made up finding.", "evidence_refs": ["E999"]}],
     )
@@ -466,11 +466,39 @@ def test_unknown_evidence_ref_is_rejected(tmp_path: Path) -> None:
         make_investigator(FakeCollector(), FakeBackend(lambda t, p: bad), tmp_path),
         make_alert(),
     )
-    assert report.status == "partial"
+    assert report.draft is not None
+    assert report.partial_category is not PartialCategory.INVALID_REPORT
+    assert report.draft.observations == ()
+    assert [(h.statement, h.verdict) for h in report.draft.hypotheses] == [
+        ("Made up finding.", "unverified")
+    ]
+    codes = [n.code for n in report.validation_notes]
+    assert codes == [c.ValidationNoteCode.REFS_REMOVED, c.ValidationNoteCode.DOWNGRADED]
+    assert "Made up" not in " ".join(n.detail for n in report.validation_notes)
+
+
+def test_unsalvageable_model_output_is_rejected_with_reason(tmp_path: Path) -> None:
+    bad = json.dumps({"summary": "", "observations": [{"evidence_refs": ["E999"]}]})
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: bad), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is None
     assert report.partial_category is PartialCategory.INVALID_REPORT
-    notes = report.validation_notes
-    assert [n.code for n in notes] == [c.ValidationNoteCode.EVIDENCE_REFERENCE]
-    assert "unknown evidence id E999" in notes[0].detail
+    assert {n.code for n in report.validation_notes} == {c.ValidationNoteCode.SCHEMA_VIOLATION}
+
+
+def test_secret_in_salvaged_text_is_redacted(tmp_path: Path) -> None:
+    leaky = draft_json(
+        summary=f"Token {TOKEN} leaked.",
+        observations=[{"text": f"Saw {TOKEN}.", "evidence_refs": ["E999"]}],
+    )
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: leaky), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is not None
+    assert TOKEN not in report.model_dump_json()
 
 
 @pytest.mark.parametrize(

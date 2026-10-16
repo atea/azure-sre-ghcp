@@ -61,6 +61,21 @@ SdkModelBackend(
    (a field path plus the validator's message, never raw model text). The worker logs
    `model output rejected: reason=<code> problems=<n> bytes=<n> incident=<prefix>`, and the
    issue renders the notes under **Model output validation**.
+
+   A reply that fails schema or evidence-reference checks is salvaged
+   (`investigation/salvage.py`) instead of discarded. The salvaged draft passes the same
+   contract and evidence rules:
+   - unknown or malformed evidence refs are removed, and texts are cut to their limits;
+   - a symptom or observation with no OK evidence becomes an `unverified` hypothesis;
+   - a `supported` hypothesis without OK support, or a `contradicted` one without
+     contradicting refs, becomes `unverified`, and failed refs are removed from support;
+   - chronology entries without a time, text, and OK evidence are dropped, as are items with
+     no text; an unknown gap category becomes `evidence_missing`;
+   - a missing summary falls back to the leading (preferably supported) finding.
+   Each change is recorded as a note: `item_dropped`, `refs_removed`, `downgraded`,
+   `truncated`, `summary_replaced`, or `field_ignored`. The worker logs
+   `model output salvaged: ...`. Only output with nothing salvageable is rejected as
+   `INVALID_REPORT`.
 8. The host derives `host_findings` from OK evidence only, with no model involvement
    (`investigation/findings.py`). The codes are:
    - `storage_account_registry_mismatch`: the configured storage account differs from the

@@ -1178,6 +1178,13 @@ class ValidationNoteCode(StrEnum):
     NOT_OBJECT = "not_object"
     SCHEMA_VIOLATION = "schema_violation"
     EVIDENCE_REFERENCE = "evidence_reference"
+    # Salvage: the reply was kept, but the host altered it to fit the contract.
+    ITEM_DROPPED = "item_dropped"
+    REFS_REMOVED = "refs_removed"
+    DOWNGRADED = "downgraded"
+    TRUNCATED = "truncated"
+    SUMMARY_REPLACED = "summary_replaced"
+    FIELD_IGNORED = "field_ignored"
 
 
 MAX_VALIDATION_NOTES: Final = 20

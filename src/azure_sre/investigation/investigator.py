@@ -43,11 +43,16 @@ from azure_sre.investigation.backend import ModelBackend, ModelSession, ToolOutc
 from azure_sre.investigation.budget import BudgetRefused, CallLedger, EvidenceLedger
 from azure_sre.investigation.findings import derive_host_findings
 from azure_sre.investigation.prompt import build_prompt
+from azure_sre.investigation.salvage import salvage_draft
 from azure_sre.security.redaction import redact_text, redact_value
 from azure_sre.worker.messages import PoisonMessage, bind_alert
 from azure_sre.worker.protocols import InvestigationDeferred
 
 logger = logging.getLogger(__name__)
+
+_SALVAGEABLE: Final = frozenset(
+    {ValidationNoteCode.SCHEMA_VIOLATION, ValidationNoteCode.EVIDENCE_REFERENCE}
+)
 
 _TOOL_NAME: Final = "query_diagnostic"
 _BASELINE_KINDS: Final = (
@@ -488,13 +493,27 @@ class CopilotInvestigator:
         # Status is host-owned: validate the reply as a draft and decide status in _report.
         document = {key: value for key, value in parsed.items() if key not in _HOST_OWNED_FIELDS}
         document["status"] = "partial"
+        redacted = dict(redact_value(document))
         try:
-            return validate_model_output(dict(redact_value(document)), bundle)
+            return validate_model_output(redacted, bundle)
         except ReportValidationError as exc:
             try:
                 code = ValidationNoteCode(exc.reason)
             except ValueError:
                 code = ValidationNoteCode.SCHEMA_VIOLATION
+            if code in _SALVAGEABLE:
+                draft, notes = salvage_draft(redacted, bundle)
+                if draft is not None:
+                    for note_code, detail in notes:
+                        ctx.note(note_code, detail)
+                    logger.warning(
+                        "model output salvaged: reason=%s problems=%d changes=%d incident=%s",
+                        code.value,
+                        len(exc.problems),
+                        len(notes),
+                        ctx.alert.incident_key[:12],
+                    )
+                    return draft
             reject(code, exc.problems)
             return None
         except ValueError:

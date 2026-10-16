@@ -50,7 +50,33 @@ _BASELINE_KINDS: Final = (
     DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
     DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
 )
-_OUTPUT_SCHEMA: Final[dict[str, Any]] = ModelReportDraft.model_json_schema()
+
+
+def strict_response_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a structured-output schema that strict model APIs accept.
+
+    Strict mode requires every object property to be listed in ``required`` and rejects
+    ``default``. Defaulted fields here are all collections, so the model returns ``[]``;
+    replies are still validated against ``ModelReportDraft`` itself.
+    """
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, Mapping):
+            out = {key: walk(value) for key, value in node.items() if key != "default"}
+            properties = out.get("properties")
+            if out.get("type") == "object" and isinstance(properties, Mapping):
+                out["required"] = list(properties)
+                out["additionalProperties"] = False
+            return out
+        if isinstance(node, list):
+            return [walk(value) for value in node]
+        return node
+
+    result: dict[str, Any] = walk(schema)
+    return result
+
+
+_OUTPUT_SCHEMA: Final[dict[str, Any]] = strict_response_schema(ModelReportDraft.model_json_schema())
 # Most to least specific: the first category found among the host gaps wins.
 _PRECEDENCE: Final = (
     PartialCategory.BUDGET_EXHAUSTED,

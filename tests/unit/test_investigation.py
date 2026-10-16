@@ -25,6 +25,7 @@ from azure_sre.investigation import (
     ToolSpec,
 )
 from azure_sre.investigation.investigator import (
+    _OUTPUT_SCHEMA,
     AlertRejected,
     CopilotInvestigator,
     _QueryParams,
@@ -588,6 +589,30 @@ async def test_sdk_backend_token_provider_accepts_sdk_origin_and_rejects_others(
     with pytest.raises(PermissionError):
         await backend._token_provider({**args, "host": "https://evil.example"})  # type: ignore[arg-type]
     assert seen == ["https://github.com"]
+
+
+def test_output_schema_is_strict_structured_output_compatible() -> None:
+    objects: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            assert "default" not in node
+            if node.get("type") == "object" and "properties" in node:
+                objects.append(node)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(_OUTPUT_SCHEMA)
+    assert objects
+    for node in objects:
+        assert node["required"] == list(node["properties"])
+        assert node["additionalProperties"] is False
+    assert "gaps" in _OUTPUT_SCHEMA["required"]
+    # Host validation still accepts drafts that omit defaulted collections.
+    assert c.ModelReportDraft.model_validate({"status": "partial", "summary": "s"}).gaps == ()
 
 
 def test_scratch_root_must_exist(tmp_path: Path) -> None:

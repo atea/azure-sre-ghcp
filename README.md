@@ -10,13 +10,13 @@ resources.
 
 ```mermaid
 flowchart LR
-    A["Azure Monitor"] -->|Entra-authenticated webhook| B["Receiver"]
-    B -->|Durable normalized alert| C["Service Bus"]
-    C --> D["Worker"]
-    D -->|Allowlisted read-only diagnostics| E["Azure Monitor data"]
-    D -->|Bounded evidence| F["Copilot investigation"]
-    D -->|Verified, reconciled write| G["GitHub issue"]
-    D --> H ["Azure Table and Blob Storage"]
+    A[Azure Monitor] -->|Entra-authenticated webhook| B[Receiver]
+    B -->|Durable normalized alert| C[Service Bus]
+    C --> D[Worker]
+    D -->|Allowlisted read-only diagnostics| E[Azure Monitor data]
+    D -->|Bounded evidence| F[Copilot investigation]
+    D -->|Verified, reconciled write| G[GitHub issue]
+    D --> H [Azure Table and Blob Storage]
 ```
 
 1. The receiver authenticates and authorizes the Entra caller, validates the

@@ -6,6 +6,7 @@ import json
 
 from azure_sre.contracts import EvidenceBundle, NormalizedAlert
 from azure_sre.diagnostics.templates import DiagnosticKind
+from azure_sre.investigation.findings import derive_host_findings
 from azure_sre.security.redaction import redact_text
 
 _ALERT_RULE_CHARS = 200
@@ -17,6 +18,9 @@ def build_prompt(alert: NormalizedAlert, baseline: EvidenceBundle) -> str:
     untrusted = {
         "alert_rule": redact_text(alert.alert_rule or "")[:_ALERT_RULE_CHARS],
         "baseline_evidence": baseline.model_dump(mode="json"),
+        "host_findings": [
+            finding.model_dump(mode="json") for finding in derive_host_findings(baseline)
+        ],
     }
     return (
         "You are an Azure SRE investigator. Explain the alert below and propose next steps.\n"
@@ -30,6 +34,17 @@ def build_prompt(alert: NormalizedAlert, baseline: EvidenceBundle) -> str:
         "- Cite evidence only by ids that exist (E1, E2, ...). Never cite an item whose "
         "status is not ok "
         "as support for a finding; report it as a gap instead.\n"
+        "- Reason from symptoms to cause. Correlate error rows (DNS, connection, 5xx) with "
+        "configuration facts such as storage.*, probes.* and env names, and with "
+        "host_findings, which the host derived deterministically from the cited evidence.\n"
+        "- A DNS failure for a configured dependency host means the app cannot reach that "
+        "dependency. If that explains the alert's symptoms, record it as a supported "
+        "hypothesis citing the ok evidence, and propose concrete developer actions such as "
+        "verifying the configured name.\n"
+        "- A gap in evidence that is unrelated to the cause, such as missing App Insights "
+        "linkage, does not make a supported hypothesis unverified. List it under gaps.\n"
+        "- Set status to complete when a supported hypothesis explains the alert's symptoms. "
+        "Use partial only when the available evidence cannot explain them.\n"
         "- Reply only with JSON matching the requested schema.\n"
         f"Alert id: {alert.alert_id}\n"
         f"Application: {alert.app_id} ({alert.environment})\n"

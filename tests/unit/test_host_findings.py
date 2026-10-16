@@ -227,3 +227,26 @@ def test_partial_issue_without_draft_leads_with_host_findings() -> None:
     findings_at = body.index("## Host-verified findings")
     assert findings_at < body.index("## Alert")
     assert 'configured storage account "stdemoapp1v2ho7" failed DNS' in body
+
+
+def test_prompt_carries_host_findings_as_untrusted_data_with_reasoning_rules() -> None:
+    from azure_sre.investigation.prompt import build_prompt
+
+    evidence = bundle(
+        health(**{"storage.configured_account": "stdemoapp1v2ho7"}),
+        errors(dns_row(), http_row()),
+    )
+    prompt = build_prompt(make_alert(), evidence)
+    rules, data = prompt.rsplit("<untrusted_data>\n", 1)
+    assert "storage_account_dns_failure" in data
+    assert "storage_account_dns_failure" not in rules
+    assert "supported hypothesis" in rules
+    assert "does not make a supported hypothesis unverified" in rules
+    assert "Set status to complete when a supported hypothesis explains" in rules
+
+
+def test_prompt_has_empty_host_findings_without_evidence() -> None:
+    from azure_sre.investigation.prompt import build_prompt
+
+    prompt = build_prompt(make_alert(), bundle())
+    assert '"host_findings": []' in prompt

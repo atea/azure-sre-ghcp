@@ -32,7 +32,12 @@ SdkModelBackend(
 ## Flow
 
 1. Validate the alert against the registry: app id, all seven resource fields, and the fingerprint.
-2. Run baseline host diagnostics (`_BASELINE_KINDS`) before the model is invoked.
+2. Run baseline host diagnostics (`_BASELINE_KINDS`) before the model is invoked. The prompt
+   carries the baseline evidence and its derived `host_findings`, both inside
+   `<untrusted_data>`. Its rules tell the model to correlate error rows with configuration
+   facts and findings. A DNS failure for a configured dependency is recorded as a supported
+   hypothesis when it explains the symptoms, and unrelated gaps (such as App Insights
+   linkage) do not downgrade it. The host still decides the final report status.
 3. Open an isolated SDK client and session in a private workspace. Tokens come only from the injected host supplier.
 4. The model may call one typed tool, `kind` plus a bounded `operation_id`. Scope, app, and time window are fixed by the host. Extra fields are rejected.
 5. Every tool call, including baseline and refused calls, counts against the shared budget: 12 calls, 5 minutes overall, 30 s per CLI call, 100 rows per query, 64 KiB of evidence.

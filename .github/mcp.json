@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "azure": {
+      "type": "local",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@azure/mcp@latest",
+        "server",
+        "start",
+        "--read-only"
+      ],
+      "tools": [
+        "subscription_list",
+        "group_list",
+        "group_resource_list",
+        "containerapps",
+        "applicationinsights",
+        "monitor",
+        "servicebus",
+        "storage",
+        "documentation",
+        "get_azure_bestpractices"
+      ]
+    }
+  }
+}

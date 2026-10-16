@@ -32,6 +32,9 @@ LAW = (
     "Microsoft.OperationalInsights/workspaces/law"
 )
 WS = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+STORAGE = (
+    f"/subscriptions/{SUB}/resourceGroups/{RG}/providers/Microsoft.Storage/storageAccounts/shopdata"
+)
 KEY = "a" * 64
 NOW = datetime(2026, 10, 13, 6, 30, tzinfo=UTC)
 WINDOW = c.DiagnosticWindow(start=NOW - timedelta(minutes=20), end=NOW)
@@ -47,6 +50,7 @@ def registry() -> c.ApplicationRegistry:
                 environment="prod",
                 subscription_id=SUB,
                 container_app_id=APP,
+                storage_account_id=STORAGE,
                 app_insights_component_id=AI,
                 log_analytics_workspace_id=WS,
                 log_analytics_workspace_resource_id=LAW,
@@ -349,6 +353,77 @@ def test_container_app_fields_are_projected_and_extras_dropped() -> None:
     item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_HEALTH, WINDOW)
     assert item.status is EvidenceStatus.OK
     assert "secretEnvValue" not in json.dumps(item.model_dump(mode="json"))
+
+
+@pytest.mark.parametrize("account,match", [("shopdata", True), ("shopdat", False)])
+def test_health_compares_only_allowlisted_storage_setting(account: str, match: bool) -> None:
+    secret = "do-not-publish-this-value"
+    runner = FakeRunner(
+        ok(
+            {
+                "name": "shop-api",
+                "properties": {
+                    "template": {
+                        "containers": [
+                            {
+                                "env": [
+                                    {"name": "AZURE_STORAGE_ACCOUNT_NAME", "value": account},
+                                    {"name": "PASSWORD", "value": secret},
+                                    {"name": "CONNECTION_STRING", "secretRef": "private"},
+                                ]
+                            }
+                        ]
+                    }
+                },
+            }
+        )
+    )
+    item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_HEALTH, WINDOW)
+    assert item.rows[0]["storage.account_matches_registry"] is match
+    assert item.rows[0]["storage.expected_account"] == "shopdata"
+    assert secret not in item.model_dump_json()
+    assert "PASSWORD" not in item.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"name": "AZURE_STORAGE_ACCOUNT_NAME", "secretRef": "private"},
+        {"name": "AZURE_STORAGE_ACCOUNT_NAME", "value": "https://untrusted.invalid/"},
+    ],
+)
+def test_health_never_exposes_secret_refs_or_invalid_storage_names(entry: dict[str, str]) -> None:
+    runner = FakeRunner(
+        ok(
+            {
+                "name": "shop-api",
+                "properties": {"template": {"containers": [{"env": [entry]}]}},
+            }
+        )
+    )
+    item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_HEALTH, WINDOW)
+    assert item.rows[0]["storage.setting_status"] == "invalid_or_ambiguous"
+    assert "storage.configured_account" not in item.rows[0]
+    assert "untrusted.invalid" not in item.model_dump_json()
+    assert "private" not in item.model_dump_json()
+
+
+def test_storage_dependency_read_is_management_plane_only() -> None:
+    runner = FakeRunner(ok({"name": "shopdata", "id": STORAGE, "accessKeys": "secret"}))
+    item = collector(runner).collect("shop", DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION, WINDOW)
+    assert argv_of(runner)[:4] == ("az", "storage", "account", "show")
+    assert f"--ids={STORAGE.lower()}" in argv_of(runner)
+    assert "secret" not in item.model_dump_json()
+
+
+@pytest.mark.parametrize("resource", [APP, STORAGE.replace(SUB, TENANT)])
+def test_dependency_mapping_rejects_wrong_type_or_subscription(resource: str) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        c.ApplicationMapping.model_validate(
+            registry().applications[0].model_dump() | {"storage_account_id": resource}
+        )
 
 
 # Results and error mapping ---------------------------------------------------------------

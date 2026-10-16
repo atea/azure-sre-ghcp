@@ -25,6 +25,7 @@ class DiagnosticKind(StrEnum):
     """Closed set of diagnostics the collector can run. Values match ``EvidenceSource``."""
 
     CONTAINER_APP_HEALTH = "container_app_health"
+    STORAGE_ACCOUNT_CONFIGURATION = "storage_account_configuration"
     CONTAINER_APP_REVISIONS = "container_app_revisions"
     APP_INSIGHTS_EXCEPTIONS = "app_insights_exceptions"
     APP_INSIGHTS_CONFIGURATION = "app_insights_configuration"
@@ -206,6 +207,19 @@ def _ai_configuration_argv(ctx: QueryContext) -> tuple[str, ...]:
     )
 
 
+def _storage_configuration_argv(ctx: QueryContext) -> tuple[str, ...]:
+    if ctx.mapping.storage_account_id is None:
+        raise TemplateError("no trusted storage dependency configured")
+    return (
+        "az",
+        "storage",
+        "account",
+        "show",
+        f"--ids={_validate_resource_id(ctx.mapping.storage_account_id)}",
+        "--output=json",
+    )
+
+
 def _console_logs_argv(ctx: QueryContext) -> tuple[str, ...]:
     kql = (
         f"ContainerAppConsoleLogs_CL | where {_kql_time_filter(ctx.window)} "
@@ -273,6 +287,13 @@ def _activity_argv(ctx: QueryContext) -> tuple[str, ...]:
 
 
 TEMPLATES: Final[Mapping[DiagnosticKind, Template]] = {
+    DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION: Template(
+        kind=DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION,
+        template_id="storage-configuration-v1",
+        fields=("id", "name", "provisioningState", "publicNetworkAccess"),
+        supports_operation_id=False,
+        build_argv=_storage_configuration_argv,
+    ),
     DiagnosticKind.APP_INSIGHTS_CONFIGURATION: Template(
         kind=DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
         template_id="ai-configuration-v1",
@@ -402,3 +423,49 @@ def project_row(
         if present and (value is None or isinstance(value, str | int | float | bool)):
             out[field] = value
     return out or None
+
+
+def project_storage_setting(
+    source: Mapping[str, Any],
+    mapping: ApplicationMapping,
+) -> dict[str, str | bool]:
+    """Extract exactly one approved non-secret setting, never arbitrary env values."""
+    properties = source.get("properties")
+    if not isinstance(properties, Mapping):
+        return {}
+    template = properties.get("template")
+    if not isinstance(template, Mapping) or not isinstance(template.get("containers"), list):
+        return {}
+    values: set[str] = set()
+    invalid = False
+    for container in template["containers"]:
+        if not isinstance(container, Mapping) or not isinstance(container.get("env", []), list):
+            invalid = True
+            continue
+        for entry in container.get("env", []):
+            if not isinstance(entry, Mapping) or entry.get("name") != "AZURE_STORAGE_ACCOUNT_NAME":
+                continue
+            value = entry.get("value")
+            if (
+                entry.get("secretRef")
+                or not isinstance(value, str)
+                or not re.fullmatch(
+                    r"[a-z0-9]{3,24}",
+                    value,
+                )
+            ):
+                invalid = True
+            else:
+                values.add(value)
+    out: dict[str, str | bool] = {}
+    if invalid or len(values) != 1:
+        out["storage.setting_status"] = "invalid_or_ambiguous" if invalid or values else "absent"
+        return out
+    account = next(iter(values))
+    out["storage.configured_account"] = account
+    out["storage.setting_status"] = "configured"
+    if mapping.storage_account_id is not None:
+        expected = parse_resource_id(mapping.storage_account_id).name
+        out["storage.expected_account"] = expected
+        out["storage.account_matches_registry"] = account == expected
+    return out

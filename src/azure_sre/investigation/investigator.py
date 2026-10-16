@@ -265,6 +265,9 @@ class CopilotInvestigator:
                     and not item.truncated
                     for item in ctx.ledger.items
                 )
+        mapping = self._registry.get(ctx.app_id)
+        if mapping is not None and mapping.storage_account_id is not None and not ctx.stopped:
+            await self._collect(ctx, DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION, None)
 
     def _tool_specs(self, ctx: _RunContext) -> list[ToolSpec]:
         async def handle(params: _QueryParams) -> ToolOutcome:

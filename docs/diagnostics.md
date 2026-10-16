@@ -78,6 +78,15 @@ contains a count, first/last timestamp and one sample capped at 1000 characters.
 use the normal row/byte limits and redaction; zero matches are not proof of health.
 This evidence is retained even if inference fails.
 
+Health projection additionally extracts only `AZURE_STORAGE_ACCOUNT_NAME` from the
+container environment. Invalid, secret-referenced, missing or conflicting settings are
+reported explicitly without exposing arbitrary environment values. With a trusted
+`storage_account_id`, the evidence includes expected/observed account names and a match
+boolean. The baseline then runs `storage_account_configuration`, a management-plane
+`az storage account show` against that exact registry ID. Missing resources and denied
+reads retain explicit error statuses. No keys, data-plane reads or model-chosen DNS probes
+are used.
+
 `project_row` keeps only allowlisted scalar fields (dotted paths for nested JSON). It returns
 `None` when a row has no recognised field. Such payloads are classified as `ERROR`
 ("unrecognised schema"), never as healthy or zero rows. Empty stdout from a health command is

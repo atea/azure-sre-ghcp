@@ -164,6 +164,7 @@ class TargetKind(StrEnum):
 
 class EvidenceSource(StrEnum):
     CONTAINER_APP_HEALTH = "container_app_health"
+    STORAGE_ACCOUNT_CONFIGURATION = "storage_account_configuration"
     CONTAINER_APP_REVISIONS = "container_app_revisions"
     APP_INSIGHTS_EXCEPTIONS = "app_insights_exceptions"
     APP_INSIGHTS_CONFIGURATION = "app_insights_configuration"
@@ -440,6 +441,7 @@ class ApplicationMapping(StrictModel):
     environment: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     subscription_id: str
     container_app_id: str
+    storage_account_id: str | None = None
     app_insights_component_id: str
     log_analytics_workspace_id: str
     log_analytics_workspace_resource_id: str | None = None
@@ -468,6 +470,18 @@ class ApplicationMapping(StrictModel):
     def _container_app(cls, value: str) -> str:
         return _canonical_of_kind(value, TargetKind.CONTAINER_APP)
 
+    @field_validator("storage_account_id")
+    @classmethod
+    def _storage_account(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        resource = parse_resource_id(value)
+        if resource.type_key != "microsoft.storage/storageaccounts":
+            raise ContractError("invalid_mapping", "dependency must be a storage account")
+        if not re.fullmatch(r"[a-z0-9]{3,24}", resource.name):
+            raise ContractError("invalid_mapping", "invalid storage account name")
+        return resource.canonical
+
     @field_validator("app_insights_component_id")
     @classmethod
     def _component(cls, value: str) -> str:
@@ -486,7 +500,10 @@ class ApplicationMapping(StrictModel):
             self.app_insights_workspace_resource_id is None
         ):
             raise ContractError("invalid_mapping", "App Insights workspace fields must be paired")
-        for canonical in self.arm_ids():
+        for canonical in (
+            *self.arm_ids(),
+            *((self.storage_account_id,) if self.storage_account_id else ()),
+        ):
             if parse_resource_id(canonical).subscription_id != self.subscription_id:
                 raise ContractError(
                     NormalizationErrorCode.CROSS_SUBSCRIPTION,

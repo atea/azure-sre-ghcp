@@ -31,6 +31,7 @@ from azure_sre.diagnostics.templates import (
     QueryContext,
     TemplateError,
     project_row,
+    project_storage_setting,
 )
 from azure_sre.security.redaction import redact_value
 
@@ -39,6 +40,7 @@ _SINGLE_OBJECT_KINDS: Final = frozenset(
     {
         DiagnosticKind.CONTAINER_APP_HEALTH,
         DiagnosticKind.APP_INSIGHTS_CONFIGURATION,
+        DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION,
     }
 )
 _PERMISSION_MARKERS: Final = (b"authorizationfailed", b"forbidden", b"does not have authorization")
@@ -311,6 +313,8 @@ class DiagnosticsCollector:
                     EvidenceStatus.ERROR,
                     "diagnostic output had an unrecognised schema",
                 )
+            if kind is DiagnosticKind.CONTAINER_APP_HEALTH:
+                projected.update(project_storage_setting(raw, mapping))
             rows.append(redact_value(projected))
         if kind is DiagnosticKind.APP_INSIGHTS_CONFIGURATION and rows:
             expected = (

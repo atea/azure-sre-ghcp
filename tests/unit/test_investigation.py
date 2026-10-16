@@ -255,6 +255,22 @@ def test_mismatched_ai_linkage_blocks_ai_queries(tmp_path: Path) -> None:
     )
 
 
+def test_registered_storage_dependency_is_in_host_baseline(tmp_path: Path) -> None:
+    from .test_diagnostics_collector import STORAGE
+
+    reg = registry(mapping(storage_account_id=STORAGE))
+    coll = FakeCollector()
+    report = run(
+        make_investigator(coll, FakeBackend(lambda tools, prompt: draft_json()), tmp_path, reg=reg),
+        make_alert(reg),
+    )
+    assert any(kind is DiagnosticKind.STORAGE_ACCOUNT_CONFIGURATION for _, kind, _ in coll.calls)
+    assert any(
+        item.provenance.source is c.EvidenceSource.STORAGE_ACCOUNT_CONFIGURATION
+        for item in report.evidence.items
+    )
+
+
 def test_temp_workspace_is_private_and_removed(tmp_path: Path) -> None:
     backend = FakeBackend(lambda tools, prompt: draft_json())
     run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())

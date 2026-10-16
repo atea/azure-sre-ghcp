@@ -53,6 +53,11 @@ Each application mapping uses the field rules in `azure_sre.contracts.Applicatio
 - `app_id`, `environment`: names.
 - `subscription_id`: GUID. Every ARM resource ID below must sit in this subscription.
 - `container_app_id`: `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/containerApps/<name>`.
+- `storage_account_id`: optional trusted `.../providers/Microsoft.Storage/storageAccounts/<name>`.
+  The health diagnostic compares the exact allowlisted non-secret setting
+  `AZURE_STORAGE_ACCOUNT_NAME` to this account name. The host baseline reads the account's
+  management-plane configuration to verify it exists; grant Reader on this account only.
+  It never lists keys or queries account data, probes arbitrary hosts, or follows log URLs.
 - `app_insights_component_id`: `.../providers/Microsoft.Insights/components/<name>`.
 - `log_analytics_workspace_id`: workspace GUID.
 - `log_analytics_workspace_resource_id`: optional `.../providers/Microsoft.OperationalInsights/workspaces/<name>`.

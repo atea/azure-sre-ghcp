@@ -11,6 +11,7 @@ truncation is explicit and never drops the Gaps section.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Callable, Sequence
@@ -184,10 +185,22 @@ def _evidence_line(item: EvidenceItem) -> str:
     ]
     if item.error is not None:
         parts.append(f"error `{item.error.category.value}`")
+        parts.append(escape_inline(item.error.message, 200))
     line = " · ".join(parts)
     if item.summary:
         line += f" — {escape_inline(item.summary, 300)}"
     return line
+
+
+def _evidence_samples(item: EvidenceItem) -> list[str]:
+    lines = [
+        f"- **{item.evidence_id}** sample {index}: "
+        f"{escape_inline(json.dumps(dict(row), sort_keys=True, ensure_ascii=False), 1000)}"
+        for index, row in enumerate(item.rows[:3], start=1)
+    ]
+    if len(item.rows) > 3:
+        lines.append(f"- **{item.evidence_id}**: additional rows omitted from this issue.")
+    return lines
 
 
 def render_issue_body(
@@ -280,6 +293,11 @@ def render_issue_body(
             [_evidence_line(i) for i in report.evidence.items],
             "_No evidence was collected._",
         ),
+        "samples": _Section(
+            "Collected evidence samples",
+            [line for item in report.evidence.items for line in _evidence_samples(item)],
+            "_No evidence rows were collected; see provenance and gaps._",
+        ),
         "actions": _Section(
             "Developer actions",
             [
@@ -304,7 +322,7 @@ def render_issue_body(
         for key in order:
             lines += sections[key].render(budget_label)
         lines += ["## Gaps", "", *gap_tiers[state["gaps"]], ""]
-        for key in ("evidence", "actions"):
+        for key in ("samples", "evidence", "actions"):
             lines += sections[key].render(budget_label)
         lines += footer
         return redact_text("\n".join(lines) + "\n")
@@ -322,7 +340,15 @@ def render_issue_body(
             raise RenderError("issue body budget too small for required content")
 
     # Optional items in priority order; each section keeps its leading items.
-    for key in ("hypotheses", "observations", "symptoms", "actions", "timeline", "evidence"):
+    for key in (
+        "samples",
+        "hypotheses",
+        "observations",
+        "symptoms",
+        "actions",
+        "timeline",
+        "evidence",
+    ):
         _fill(sections[key], fits)
 
     body = compose()

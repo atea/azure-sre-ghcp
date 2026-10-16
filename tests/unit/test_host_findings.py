@@ -223,8 +223,8 @@ def test_partial_issue_without_draft_leads_with_host_findings() -> None:
         window_before_minutes=15,
         window_after_minutes=5,
     )
-    assert "see the host-verified findings below" in body
-    findings_at = body.index("## Host-verified findings")
+    assert "see the host checks below" in body
+    findings_at = body.index("## Host checks")
     assert findings_at < body.index("## Alert")
     assert 'configured storage account "stdemoapp1v2ho7" failed DNS' in body
 
@@ -242,7 +242,8 @@ def test_prompt_carries_host_findings_as_untrusted_data_with_reasoning_rules() -
     assert "storage_account_dns_failure" not in rules
     assert "supported hypothesis" in rules
     assert "does not make a supported hypothesis unverified" in rules
-    assert "Set status to complete when a supported hypothesis explains" in rules
+    assert "The host decides whether the report is complete" in rules
+    assert "gaps never prevent a supported hypothesis" in rules
 
 
 def test_prompt_has_empty_host_findings_without_evidence() -> None:

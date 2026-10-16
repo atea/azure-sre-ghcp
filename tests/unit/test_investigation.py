@@ -458,7 +458,7 @@ def test_invalid_json_output_is_invalid_report_partial(tmp_path: Path) -> None:
     assert report.draft is None
 
 
-def test_unknown_evidence_ref_is_rejected(tmp_path: Path) -> None:
+def test_unknown_evidence_ref_is_salvaged_as_unverified_hypothesis(tmp_path: Path) -> None:
     bad = draft_json(
         observations=[{"text": "Made up finding.", "evidence_refs": ["E999"]}],
     )
@@ -466,8 +466,76 @@ def test_unknown_evidence_ref_is_rejected(tmp_path: Path) -> None:
         make_investigator(FakeCollector(), FakeBackend(lambda t, p: bad), tmp_path),
         make_alert(),
     )
-    assert report.status == "partial"
+    assert report.draft is not None
+    assert report.partial_category is not PartialCategory.INVALID_REPORT
+    assert report.draft.observations == ()
+    assert [(h.statement, h.verdict) for h in report.draft.hypotheses] == [
+        ("Made up finding.", "unverified")
+    ]
+    codes = [n.code for n in report.validation_notes]
+    assert codes == [
+        c.ValidationNoteCode.REFS_REMOVED,
+        c.ValidationNoteCode.DOWNGRADED,
+        c.ValidationNoteCode.REPAIR_ATTEMPTED,
+    ]
+    assert "Made up" not in " ".join(n.detail for n in report.validation_notes)
+
+
+def test_unsalvageable_model_output_is_rejected_with_reason(tmp_path: Path) -> None:
+    bad = json.dumps({"summary": "", "observations": [{"evidence_refs": ["E999"]}]})
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: bad), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is None
     assert report.partial_category is PartialCategory.INVALID_REPORT
+    assert {n.code for n in report.validation_notes} == {
+        c.ValidationNoteCode.SCHEMA_VIOLATION,
+        c.ValidationNoteCode.REPAIR_ATTEMPTED,
+    }
+
+
+def test_secret_in_salvaged_text_is_redacted(tmp_path: Path) -> None:
+    leaky = draft_json(
+        summary=f"Token {TOKEN} leaked.",
+        observations=[{"text": f"Saw {TOKEN}.", "evidence_refs": ["E999"]}],
+    )
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: leaky), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is not None
+    assert TOKEN not in report.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("reply", "code"),
+    [
+        ("not json", "invalid_json"),
+        ("[1, 2]", "not_object"),
+        ('{"summary": 5}', "schema_violation"),
+    ],
+)
+def test_rejected_model_output_records_reason_codes(
+    tmp_path: Path, reply: str, code: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: reply), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is None
+    assert report.partial_category is PartialCategory.INVALID_REPORT
+    assert {n.code.value for n in report.validation_notes} == {code, "repair_attempted"}
+    assert f"model output rejected: reason={code}" in caplog.text
+    assert reply not in caplog.text
+
+
+def test_valid_model_output_has_no_validation_notes(tmp_path: Path) -> None:
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: draft_json()), tmp_path),
+        make_alert(),
+    )
+    assert report.validation_notes == ()
 
 
 def test_secret_in_model_summary_is_redacted(tmp_path: Path) -> None:
@@ -660,6 +728,7 @@ def test_output_schema_is_strict_structured_output_compatible() -> None:
         assert node["required"] == list(node["properties"])
         assert node["additionalProperties"] is False
     assert "gaps" in _OUTPUT_SCHEMA["required"]
+    assert "status" not in _OUTPUT_SCHEMA["properties"]
     # Host validation still accepts drafts that omit defaulted collections.
     assert c.ModelReportDraft.model_validate({"status": "partial", "summary": "s"}).gaps == ()
 
@@ -789,3 +858,139 @@ def test_unverified_hypothesis_with_gap_stays_inconclusive(tmp_path: Path) -> No
     )
     assert report.status == "partial" and report.draft is not None
     assert report.conclusion == "inconclusive"
+
+
+def test_supported_cause_with_model_gaps_is_kept_not_rejected(tmp_path: Path) -> None:
+    """Regression: a supported cause plus unrelated gaps used to be rejected as complete."""
+
+    reply = draft_json(
+        status="complete",
+        hypotheses=[
+            {
+                "statement": "The storage host does not resolve.",
+                "support_refs": ["E2"],
+                "contradiction_refs": [],
+                "verdict": "supported",
+            }
+        ],
+        gaps=[
+            {
+                "description": "App Insights linkage unavailable.",
+                "category": "evidence_missing",
+                "evidence_refs": [],
+            }
+        ],
+    )
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: reply), tmp_path),
+        make_alert(),
+    )
+    assert report.draft is not None
+    assert report.status == "partial"
+    assert report.partial_category is PartialCategory.EVIDENCE_MISSING
+    assert report.conclusion == "conclusive"
+
+
+def test_model_status_is_ignored_and_host_decides(tmp_path: Path) -> None:
+    hedged = draft_json(status="partial")
+    report = run(
+        make_investigator(FakeCollector(), FakeBackend(lambda t, p: hedged), tmp_path),
+        make_alert(),
+    )
+    assert report.status == "complete"
+    assert report.draft is not None and report.draft.status == "complete"
+
+
+def test_model_gap_alone_makes_report_partial(tmp_path: Path) -> None:
+    gap = {"description": "No traces.", "category": "evidence_missing", "evidence_refs": []}
+    report = run(
+        make_investigator(
+            FakeCollector(), FakeBackend(lambda t, p: draft_json(gaps=[gap])), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.status == "partial"
+    assert report.partial_category is PartialCategory.EVIDENCE_MISSING
+
+
+REPAIR_MARK = "could not accept your previous reply"
+BAD_CAUSE = {
+    "statement": "UniqueModelClaim storage is down.",
+    "support_refs": ["E9"],
+    "contradiction_refs": [],
+    "verdict": "supported",
+}
+GOOD_CAUSE = {**BAD_CAUSE, "support_refs": ["E1"]}
+
+
+def test_repair_turn_replaces_lossy_reply_with_corrected_one(tmp_path: Path) -> None:
+    def script(tools: Any, prompt: str) -> str:
+        cause = GOOD_CAUSE if REPAIR_MARK in prompt else BAD_CAUSE
+        return draft_json(hypotheses=[cause])
+
+    backend = FakeBackend(script)
+    report = run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    assert len(backend.prompts) == 2
+    repair = backend.prompts[1]
+    assert "UniqueModelClaim" not in repair
+    assert "hypotheses[0]" in repair and "E1" in repair
+    assert report.draft is not None
+    assert report.draft.hypotheses[0].verdict == "supported"
+    assert report.conclusion == "conclusive"
+    assert [(n.code.value, n.detail) for n in report.validation_notes] == [
+        ("repair_attempted", "repair turn accepted: the corrected reply replaced the original")
+    ]
+
+
+def test_valid_reply_skips_repair_turn(tmp_path: Path) -> None:
+    backend = FakeBackend(lambda t, p: draft_json())
+    run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    assert len(backend.prompts) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [RuntimeError("boom"), InvestigationDeferred("rate_limited", reason="model_rate_limited")],
+)
+def test_failed_repair_turn_keeps_salvaged_original(tmp_path: Path, failure: Exception) -> None:
+    def script(tools: Any, prompt: str) -> str:
+        if REPAIR_MARK in prompt:
+            raise failure
+        return draft_json(hypotheses=[BAD_CAUSE])
+
+    report = run(make_investigator(FakeCollector(), FakeBackend(script), tmp_path), make_alert())
+    assert report.draft is not None
+    assert report.draft.hypotheses[0].verdict == "unverified"
+    assert report.partial_category is not PartialCategory.SDK_ERROR
+    assert report.validation_notes[-1].detail == "repair turn failed; kept the original reply"
+
+
+def test_worse_repair_reply_is_ignored(tmp_path: Path) -> None:
+    def script(tools: Any, prompt: str) -> str:
+        return "garbage" if REPAIR_MARK in prompt else draft_json(hypotheses=[BAD_CAUSE])
+
+    report = run(make_investigator(FakeCollector(), FakeBackend(script), tmp_path), make_alert())
+    assert report.draft is not None
+    assert report.draft.hypotheses[0].statement == BAD_CAUSE["statement"]
+    assert "did not improve" in report.validation_notes[-1].detail
+
+
+def test_model_assessment_is_kept_redacted_and_required_in_schema(tmp_path: Path) -> None:
+    assert "assessment" in _OUTPUT_SCHEMA["required"]
+    opinion = f"I think storage DNS fails (E1). Speculation: a typo. Token {TOKEN}."
+    report = run(
+        make_investigator(
+            FakeCollector(), FakeBackend(lambda t, p: draft_json(assessment=opinion)), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.draft is not None
+    assert "I think storage DNS fails (E1)." in report.draft.assessment
+    assert TOKEN not in report.draft.assessment
+    assert "In assessment, give your own expert opinion" in run_prompt(tmp_path)
+
+
+def run_prompt(tmp_path: Path) -> str:
+    backend = FakeBackend(lambda t, p: draft_json())
+    run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    return backend.prompts[0]

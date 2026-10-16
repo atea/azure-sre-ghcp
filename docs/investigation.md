@@ -42,12 +42,55 @@ SdkModelBackend(
 4. The model may call one typed tool, `kind` plus a bounded `operation_id`. Scope, app, and time window are fixed by the host. Extra fields are rejected.
 5. Every tool call, including baseline and refused calls, counts against the shared budget: 12 calls, 5 minutes overall, 30 s per CLI call, 100 rows per query, 64 KiB of evidence.
 6. Model output must be JSON matching `ModelReportDraft`. It is redacted and then validated against the evidence refs.
+   `status` is host-owned: it is not in the model's response schema, and any `status` the
+   model sends is discarded. The host makes the report `complete` only when there are no
+   host or model gaps and the draft has at least one observation, symptom, or hypothesis.
+   Otherwise the report is `partial`. Its category is the run's primary failure, else the
+   highest-precedence category among host and model gaps, else the first gap's category
+   (`EVIDENCE_MISSING` for a draft with no findings). Model gaps therefore
+   never cause a supported diagnosis to be rejected.
 7. Failures become partial reports with a category: `TIMEOUT`, `SDK_ERROR`, `INVALID_REPORT`, `BUDGET_EXHAUSTED`, `EVIDENCE_MISSING`, or `PERMISSION_DENIED`.
    An `SDK_ERROR` also records a host gap `model session failed during <stage>: <reason>`.
    `stage` is `session_open` or `model_turn`. `reason` is a fixed code:
    `authentication`, `response_schema`, `model_unavailable`, `model_request_rejected`,
    `runtime_unavailable`, or `unclassified`. The code is derived from the exception type and
    message, but the message itself is never stored or logged.
+   When the model's reply is rejected, the report records up to 20 `validation_notes`. Each
+   note has a fixed `code` (`no_response`, `oversized`, `invalid_json`, `not_object`,
+   `schema_violation`, or `evidence_reference`) and a host-written, redacted `detail`
+   (a field path plus the validator's message, never raw model text). The worker logs
+   `model output rejected: reason=<code> problems=<n> bytes=<n> incident=<prefix>`, and the
+   issue renders the notes under **Model output validation**.
+
+   A reply that fails schema or evidence-reference checks is salvaged
+   (`investigation/salvage.py`) instead of discarded. The salvaged draft passes the same
+   contract and evidence rules:
+   - unknown or malformed evidence refs are removed, and texts are cut to their limits;
+   - a symptom or observation with no OK evidence becomes an `unverified` hypothesis;
+   - a `supported` hypothesis without OK support, or a `contradicted` one without
+     contradicting refs, becomes `unverified`, and failed refs are removed from support;
+   - chronology entries without a time, text, and OK evidence are dropped, as are items with
+     no text; an unknown gap category becomes `evidence_missing`;
+   - a missing summary falls back to the leading (preferably supported) finding.
+   Each change is recorded as a note: `item_dropped`, `refs_removed`, `downgraded`,
+   `truncated`, `summary_replaced`, or `field_ignored`. The worker logs
+   `model output salvaged: ...`. Only output with nothing salvageable is rejected as
+   `INVALID_REPORT`.
+
+   **AI assessment.** The draft carries an `assessment` field: the model's own opinion in
+   prose (up to 3000 characters), with inline evidence ids and speculation labelled as
+   such. It needs no structured citations and is not validated against evidence, so the
+   issue presents it as AI opinion. It is redacted like all model text and rendered
+   escaped, one line per paragraph.
+
+   **Repair turn.** If the first reply was rejected or salvage lost content (`item_dropped`,
+   `refs_removed`, `downgraded`, `summary_replaced`), the host sends one follow-up on the
+   same session (`stage=repair_turn`). The follow-up lists the host-written notes and the
+   OK and failed evidence ids; it never echoes model text. It runs only with at least 15 s
+   left and finishes 5 s before the deadline. The corrected reply replaces the original only
+   when it loses less content. A failure, timeout, or rate limit during repair keeps the
+   original reply and never defers the incident. A `repair_attempted` note records the
+   outcome. Repair tool calls share the same budget.
 8. The host derives `host_findings` from OK evidence only, with no model involvement
    (`investigation/findings.py`). The codes are:
    - `storage_account_registry_mismatch`: the configured storage account differs from the

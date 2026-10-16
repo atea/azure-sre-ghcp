@@ -27,7 +27,7 @@
         "app_insights_component_id": "/subscriptions/48e5e4b1-caf9-478e-a846-0c8dd74bcd15/resourceGroups/d-sdc-rg-ghcpsre/providers/Microsoft.Insights/components/appi-sredev",
         "log_analytics_workspace_resource_id": "/subscriptions/48e5e4b1-caf9-478e-a846-0c8dd74bcd15/resourcegroups/d-sdc-rg-ghcpsre/providers/microsoft.operationalinsights/workspaces/log-demoapp1-v2ho77",
         "repository": "atea/azure-container-app-demo",
-        "installation_id": 1
+        "installation_id": 171167534
       }
     ]
   },

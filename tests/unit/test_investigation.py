@@ -237,12 +237,14 @@ def test_mismatched_ai_linkage_blocks_ai_queries(tmp_path: Path) -> None:
 
     async def script(tools: Sequence[ToolSpec], prompt: str) -> str:
         outcome = await call_tool(tools, DiagnosticKind.APP_INSIGHTS_OPERATIONS)
-        assert not outcome.success
+        assert not outcome.ok
         return draft_json()
 
     coll = FakeCollector(evidence)
     report = run(make_investigator(coll, FakeBackend(script), tmp_path), make_alert())
     assert report.status == "partial"
+    assert report.partial_category is PartialCategory.EVIDENCE_MISSING
+    assert report.draft is not None
     assert all(
         kind
         not in (

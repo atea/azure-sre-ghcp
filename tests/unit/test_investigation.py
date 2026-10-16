@@ -973,3 +973,24 @@ def test_worse_repair_reply_is_ignored(tmp_path: Path) -> None:
     assert report.draft is not None
     assert report.draft.hypotheses[0].statement == BAD_CAUSE["statement"]
     assert "did not improve" in report.validation_notes[-1].detail
+
+
+def test_model_assessment_is_kept_redacted_and_required_in_schema(tmp_path: Path) -> None:
+    assert "assessment" in _OUTPUT_SCHEMA["required"]
+    opinion = f"I think storage DNS fails (E1). Speculation: a typo. Token {TOKEN}."
+    report = run(
+        make_investigator(
+            FakeCollector(), FakeBackend(lambda t, p: draft_json(assessment=opinion)), tmp_path
+        ),
+        make_alert(),
+    )
+    assert report.draft is not None
+    assert "I think storage DNS fails (E1)." in report.draft.assessment
+    assert TOKEN not in report.draft.assessment
+    assert "In assessment, give your own expert opinion" in run_prompt(tmp_path)
+
+
+def run_prompt(tmp_path: Path) -> str:
+    backend = FakeBackend(lambda t, p: draft_json())
+    run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())
+    return backend.prompts[0]

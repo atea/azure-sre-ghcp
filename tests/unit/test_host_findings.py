@@ -223,8 +223,8 @@ def test_partial_issue_without_draft_leads_with_host_findings() -> None:
         window_before_minutes=15,
         window_after_minutes=5,
     )
-    assert "see the host-verified findings below" in body
-    findings_at = body.index("## Host-verified findings")
+    assert "see the host checks below" in body
+    findings_at = body.index("## Host checks")
     assert findings_at < body.index("## Alert")
     assert 'configured storage account "stdemoapp1v2ho7" failed DNS' in body
 

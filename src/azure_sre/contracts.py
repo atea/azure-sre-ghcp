@@ -1225,9 +1225,14 @@ class HostFinding(StrictModel):
 Conclusion = Literal["conclusive", "inconclusive"]
 
 
+MAX_ASSESSMENT_CHARS: Final = 3000
+
+
 class ModelReportDraft(StrictModel):
     status: Literal["complete", "partial"]
     summary: Annotated[str, StringConstraints(min_length=1, max_length=1000)]
+    # The model's own reasoning in prose; uncited by design and rendered as AI opinion.
+    assessment: Annotated[str, StringConstraints(max_length=MAX_ASSESSMENT_CHARS)] = ""
     symptoms: tuple[ReportSymptom, ...] = ()
     chronology: tuple[ChronologyEntry, ...] = ()
     observations: tuple[Observation, ...] = ()

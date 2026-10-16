@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypeGuard
 
 from azure_sre.contracts import (
+    MAX_ASSESSMENT_CHARS,
     EvidenceBundle,
     EvidenceStatus,
     ModelReportDraft,
@@ -37,7 +38,7 @@ _LISTS: Final = (
     "developer_actions",
     "gaps",
 )
-_KNOWN: Final = frozenset({"status", "summary", *_LISTS})
+_KNOWN: Final = frozenset({"status", "summary", "assessment", *_LISTS})
 
 
 def _is_list(value: object) -> TypeGuard[Sequence[object]]:
@@ -266,6 +267,9 @@ def salvage_draft(
         s.note(ValidationNoteCode.SUMMARY_REPLACED, "summary: missing; used the leading finding")
         summary = fallback[0]
     candidate["summary"] = summary
+    assessment = s.text(document.get("assessment"), "assessment", MAX_ASSESSMENT_CHARS)
+    if assessment is not None:
+        candidate["assessment"] = assessment
     try:
         draft = validate_model_output(candidate, bundle)
     except ReportValidationError:

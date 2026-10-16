@@ -109,3 +109,11 @@ def test_malformed_items_are_dropped_and_categories_defaulted() -> None:
 def test_nothing_salvageable_returns_none() -> None:
     assert salvage({"summary": " ", "observations": [{"text": ""}]})[0] is None
     assert salvage({})[0] is None
+
+
+def test_assessment_survives_salvage_and_is_truncated() -> None:
+    draft, notes = salvage(
+        {"summary": "s", "assessment": "z" * 4000, "hypotheses": [hypothesis("supported", ["E2"])]}
+    )
+    assert draft is not None and len(draft.assessment) == c.MAX_ASSESSMENT_CHARS
+    assert ValidationNoteCode.TRUNCATED.value in notes

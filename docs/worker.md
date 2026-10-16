@@ -175,8 +175,9 @@ checking its marker in GitHub; never blindly reset an uncertain write to `pendin
 
 Stored reports gain optional `host_findings` and `conclusion` fields, which older strict decoders reject.
 Drain old worker replicas before deploying a version that writes it as well.
-Stored reports also gain an optional `validation_notes` field (see
-[investigation.md](investigation.md)); drain old worker replicas before deploying it.
+Stored reports also gain an optional `validation_notes` field and an optional
+`draft.assessment` field (see [investigation.md](investigation.md)); drain old worker
+replicas before deploying them.
 
 - `OPERATOR_REQUIRED` rows carry a safe `operator_reason`:
   - `fired_missing`

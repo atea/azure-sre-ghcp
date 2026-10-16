@@ -77,6 +77,12 @@ SdkModelBackend(
    `model output salvaged: ...`. Only output with nothing salvageable is rejected as
    `INVALID_REPORT`.
 
+   **AI assessment.** The draft carries an `assessment` field: the model's own opinion in
+   prose (up to 3000 characters), with inline evidence ids and speculation labelled as
+   such. It needs no structured citations and is not validated against evidence, so the
+   issue presents it as AI opinion. It is redacted like all model text and rendered
+   escaped, one line per paragraph.
+
    **Repair turn.** If the first reply was rejected or salvage lost content (`item_dropped`,
    `refs_removed`, `downgraded`, `summary_replaced`), the host sends one follow-up on the
    same session (`stage=repair_turn`). The follow-up lists the host-written notes and the

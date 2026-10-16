@@ -109,16 +109,21 @@ Each operation starts a fresh server process:
 The body has a fixed host layout:
 
 - Line 1 is exactly `<!-- azure-sre:incident:<sha256> -->`.
-- A banner follows when the report is partial. A conclusive partial report gets an
+- A NOTE banner always follows: the issue is AI-generated from read-only diagnostics, can
+  make mistakes, and its cited evidence should be verified before acting.
+- A second banner follows when the report is partial. A conclusive partial report gets an
   IMPORTANT banner, "Likely cause identified; some evidence was unavailable". Otherwise a
   WARNING banner says the findings may be incomplete.
-- Then the sections, in order: **Summary**, **Host-verified findings** (deterministic
-  findings with evidence ids), **Alert** (trusted identity, severity,
+- Then the sections, in order: **Summary**, **AI assessment** (the model's own prose
+  opinion, up to six paragraphs, only when present), **Alert** (trusted identity, severity,
   signal, fired time, window, rule, alert id, incident key), **Symptoms**, **Timeline**,
   **Observations**, **Hypotheses** (supported / contradicted / unverified, with evidence
-  ids), **Gaps**, **Model output validation** (only when the host rejected or altered
-  model output), **Collected evidence samples**, **Evidence provenance**, **Developer
-  actions** (checkboxes), and a footer.
+  ids), **Host checks** (deterministic findings with evidence ids), **Gaps**, **Model
+  output validation** (only when the host rejected or altered model output), **Collected
+  evidence samples**, **Evidence provenance**, **Developer actions** (checkboxes), and a
+  footer. Without a model draft, **Host checks** moves up to follow the Summary.
+- Optional sections fill the budget in this priority: AI assessment, hypotheses, host
+  checks, samples, observations, symptoms, actions, validation notes, timeline, provenance.
 
 All untrusted text is escaped:
 

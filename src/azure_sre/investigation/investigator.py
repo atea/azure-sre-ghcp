@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 _TOOL_NAME: Final = "query_diagnostic"
 _BASELINE_KINDS: Final = (
     DiagnosticKind.CONTAINER_APP_HEALTH,
+    DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
     DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
 )
 _OUTPUT_SCHEMA: Final[dict[str, Any]] = ModelReportDraft.model_json_schema()

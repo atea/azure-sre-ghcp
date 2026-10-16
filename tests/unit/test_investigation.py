@@ -196,6 +196,38 @@ def _empty_bundle() -> c.EvidenceBundle:
     return c.EvidenceBundle(incident_key=make_alert().incident_key, items=())
 
 
+def test_console_error_baseline_survives_sdk_failure(tmp_path: Path) -> None:
+    def evidence(kind: DiagnosticKind) -> c.EvidenceItem:
+        rows = (
+            (
+                {
+                    "ErrorKind": "dependency_dns",
+                    "Occurrences": 3,
+                    "Log_s": "Failed to resolve storage.table.core.windows.net",
+                },
+            )
+            if kind is DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS
+            else ({"n": 1},)
+        )
+        return make_item(rows=rows, kind=kind)
+
+    def fail(tools: Sequence[ToolSpec], prompt: str) -> str:
+        raise RuntimeError("SDK failed")
+
+    coll = FakeCollector(evidence)
+    report = run(make_investigator(coll, FakeBackend(fail), tmp_path), make_alert())
+    assert report.partial_category is PartialCategory.SDK_ERROR
+    assert [kind for _, kind, _ in coll.calls] == [
+        DiagnosticKind.CONTAINER_APP_HEALTH,
+        DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+        DiagnosticKind.APP_INSIGHTS_EXCEPTIONS,
+    ]
+    item = report.evidence.items[1]
+    assert item.rows[0]["Occurrences"] == 3
+    assert "Failed to resolve" in str(item.rows[0]["Log_s"])
+    assert TOKEN not in report.model_dump_json()
+
+
 def test_temp_workspace_is_private_and_removed(tmp_path: Path) -> None:
     backend = FakeBackend(lambda tools, prompt: draft_json())
     run(make_investigator(FakeCollector(), backend, tmp_path), make_alert())

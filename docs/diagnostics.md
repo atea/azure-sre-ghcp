@@ -70,6 +70,13 @@ different Container Apps environments.
 
 ## Row projection
 
+The host baseline collects health, `container_app_console_errors`, then AI exceptions
+before opening the model session. The console error template groups DNS resolution failures,
+HTTP 5xx access logs and application error lines by error class and revision. Each group
+contains a count, first/last timestamp and one sample capped at 1000 characters. Results
+use the normal row/byte limits and redaction; zero matches are not proof of health.
+This evidence is retained even if inference fails.
+
 `project_row` keeps only allowlisted scalar fields (dotted paths for nested JSON). It returns
 `None` when a row has no recognised field. Such payloads are classified as `ERROR`
 ("unrecognised schema"), never as healthy or zero rows. Empty stdout from a health command is

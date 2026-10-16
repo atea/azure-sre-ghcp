@@ -168,6 +168,7 @@ class EvidenceSource(StrEnum):
     APP_INSIGHTS_EXCEPTIONS = "app_insights_exceptions"
     APP_INSIGHTS_OPERATIONS = "app_insights_operations"
     CONTAINER_APP_CONSOLE_LOGS = "container_app_console_logs"
+    CONTAINER_APP_CONSOLE_ERRORS = "container_app_console_errors"
     CONTAINER_APP_SYSTEM_LOGS = "container_app_system_logs"
     ACTIVITY_LOG_DEPLOYMENTS = "activity_log_deployments"
 

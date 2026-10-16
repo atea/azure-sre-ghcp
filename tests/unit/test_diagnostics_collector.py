@@ -201,6 +201,26 @@ def test_activity_log_is_scoped_to_one_resource_not_subscription() -> None:
     assert not any(a.startswith("--resource-group") for a in argv)
 
 
+def test_console_error_summary_is_scoped_counted_and_sample_bounded() -> None:
+    runner = FakeRunner()
+    collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS, WINDOW)
+    query = kql_of(argv_of(runner))
+    assert "isempty(_ResourceId) and ContainerAppName_s =~ 'shop-api'" in query
+    assert "Failed to resolve" in query
+    assert "http_5xx" in query
+    assert "Occurrences=count()" in query
+    assert "substring(Log_s, 0, 1000)" in query
+    assert "| take 101" in query
+
+
+def test_console_error_samples_are_redacted() -> None:
+    token = "ghp_" + "A" * 36
+    runner = FakeRunner(ok([{"Log_s": f"Failed to resolve {token}", "Occurrences": 3}]))
+    item = collector(runner).collect("shop", DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS, WINDOW)
+    assert token not in item.model_dump_json()
+    assert item.rows[0]["Occurrences"] == 3
+
+
 def test_health_and_revisions_use_name_group_and_subscription_only() -> None:
     runner = FakeRunner()
     coll = collector(runner)

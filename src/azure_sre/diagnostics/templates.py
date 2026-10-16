@@ -29,6 +29,7 @@ class DiagnosticKind(StrEnum):
     APP_INSIGHTS_EXCEPTIONS = "app_insights_exceptions"
     APP_INSIGHTS_OPERATIONS = "app_insights_operations"
     CONTAINER_APP_CONSOLE_LOGS = "container_app_console_logs"
+    CONTAINER_APP_CONSOLE_ERRORS = "container_app_console_errors"
     CONTAINER_APP_SYSTEM_LOGS = "container_app_system_logs"
     ACTIVITY_LOG_DEPLOYMENTS = "activity_log_deployments"
 
@@ -210,6 +211,24 @@ def _system_logs_argv(ctx: QueryContext) -> tuple[str, ...]:
     return _log_query_argv(ctx, kql)
 
 
+def _console_errors_argv(ctx: QueryContext) -> tuple[str, ...]:
+    kql = (
+        f"ContainerAppConsoleLogs_CL | where {_kql_time_filter(ctx.window)} "
+        f"| where {_container_log_scope(ctx.mapping)} "
+        "| extend ErrorKind = case("
+        "Log_s has 'Failed to resolve', 'dependency_dns', "
+        r"""Log_s matches regex '" [5][0-9]{2}( |$)', 'http_5xx', """
+        "Log_s has_any ('ERROR', 'CRITICAL', 'Exception', 'Traceback'), 'application_error', '') "
+        "| where isnotempty(ErrorKind) "
+        "| summarize Occurrences=count(), FirstSeen=min(TimeGenerated), "
+        "LastSeen=max(TimeGenerated), Log_s=take_any(substring(Log_s, 0, 1000)) "
+        "by ErrorKind, RevisionName_s "
+        "| order by Occurrences desc "
+        f"| take {ctx.row_limit + 1}"
+    )
+    return _log_query_argv(ctx, kql)
+
+
 def _container_log_scope(mapping: ApplicationMapping) -> str:
     name, _, _ = _container_app_parts(mapping)
     resource = _kql_string(_container_app_id(mapping))
@@ -311,6 +330,20 @@ TEMPLATES: Final[Mapping[DiagnosticKind, Template]] = {
         fields=("TimeGenerated", "RevisionName_s", "Reason_s", "Type_s", "Msg_s"),
         supports_operation_id=False,
         build_argv=_system_logs_argv,
+    ),
+    DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS: Template(
+        kind=DiagnosticKind.CONTAINER_APP_CONSOLE_ERRORS,
+        template_id="aca-console-errors-v1",
+        fields=(
+            "ErrorKind",
+            "RevisionName_s",
+            "Occurrences",
+            "FirstSeen",
+            "LastSeen",
+            "Log_s",
+        ),
+        supports_operation_id=False,
+        build_argv=_console_errors_argv,
     ),
     DiagnosticKind.ACTIVITY_LOG_DEPLOYMENTS: Template(
         kind=DiagnosticKind.ACTIVITY_LOG_DEPLOYMENTS,

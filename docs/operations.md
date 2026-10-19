@@ -25,13 +25,18 @@ uv sync
 uv run python -m copilot download-runtime
 scripts/fetch_github_mcp_server.sh
 uv run python -m azure_sre.runtime.smoke offline
-GITHUB_MCP_SERVER_PATH=$PWD/.work/gms/github-mcp-server uv run pytest -q
+export GITHUB_MCP_SERVER_PATH=$PWD/.work/gms/github-mcp-server
+uv run python -m azure_sre.runtime.smoke mcp-tools --binary "$GITHUB_MCP_SERVER_PATH"
+uv run pytest -q -m "not live"
 uv run ruff check . && uv run mypy
 ```
 
 - Live gates are opt-in and must only target a dedicated test org, test repository and non-production subscription (see the gates document). Do not set `SRE_LIVE_GATES=1` against production.
 - Azure commands below are read-only unless marked otherwise. Confirm flags with `az <group> <command> --help` for the installed CLI version before use.
-- There is no CI pipeline yet. The folder is not a Git repository, so no GitHub Actions workflow runs these checks.
+- `.github/workflows/ci.yml` runs Ruff, mypy, pinned runtime/MCP smoke gates, offline tests,
+  and Bicep validation on pull requests and pushes to `main`. The `cd.yml` and
+  `infra-deploy.yml` workflows deploy only after their GitHub environment and Azure OIDC
+  prerequisites are configured; they do not run live acceptance gates.
 
 ## 1. Approved resource registry and schema preflight (expected)
 

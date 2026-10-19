@@ -74,10 +74,10 @@ issue/comment responses reconcile to one investigation, one issue and one recove
 comment; early Resolved waits for Fired; internal test sink never publishes; failed
 enqueue returns `503`; unknown scope is rejected before queue acceptance.
 
-Final local verification: **553 tests passed, one opt-in live test skipped**.
-Lint, formatting, strict package typing, dependency lock and Bicep compilation
-pass. The rebuilt non-root image passes actual SDK/tool-policy and MCP discovery
-smokes. See [offline acceptance](offline-acceptance.md) for external seams replaced
+The last recorded local verification passed offline tests, lint, formatting, strict
+package typing, dependency-lock checks, Bicep compilation, and rebuilt non-root
+image SDK/tool-policy and MCP discovery smokes. See [offline acceptance](offline-acceptance.md)
+for external seams replaced
 by fakes; none of these checks substitute for live deployment acceptance.
 
 Worker inference settings depend on `SRE_INFERENCE_AUTH_MODE`. The default `pat` mode
@@ -98,4 +98,6 @@ policy/billing. Verify deployed managed-identity CLI refresh, actual telemetry
 schema, JWT shape, KEDA scaling/RBAC, latency, App token expiry and real publication
 reconciliation. Base image digests, private endpoints/network design, cleanup
 retention, DLQ replay tooling and observability alert wiring require production
-sign-off. No CI/CD is connected because this is a folder without Git history.
+sign-off. CI and deployment workflows are checked in; deployment still requires
+the GitHub environment, Azure OIDC identities, and external Azure prerequisites
+described in [deployment](deployment.md).

@@ -1,8 +1,9 @@
 # Data handling
 
-Status: **offline source only; no live data flow has been approved or tested.** Several
-controls below are *expected* and not implemented yet. This page states what is true today,
-what is planned, and what remains unverified. It is not legal or compliance advice.
+Status: **offline source only; no live data flow has been approved or tested.** Most controls
+below are implemented in source but remain unverified in deployment; retention cleanup is not
+implemented. This page states what is true today, what is planned, and what remains unverified.
+It is not legal or compliance advice.
 
 ## What data is involved
 

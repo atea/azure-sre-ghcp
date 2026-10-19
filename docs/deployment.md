@@ -124,7 +124,7 @@ configure required reviewers as appropriate. Set these **environment secrets**
 | `AZURE_TENANT_ID` | Entra tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 | `AZURE_INFRA_CLIENT_ID` | Client ID of the infrastructure deployment identity |
-| `AZURE_APP_CLIENT_ID` | Client ID of the application build/deploy identity |
+| `AZURE_CLIENT_ID` | Client ID of the application build/deploy identity |
 | `AZURE_RESOURCE_GROUP` | Existing target resource group |
 
 Set these **environment variables**:
@@ -196,9 +196,8 @@ checks do not replace the live authentication/investigation gates in
 
 ## Validation done offline
 
-- `az bicep lint --file infra/main.bicep` and `az bicep build --file infra/main.bicep` pass with no warnings (Bicep 0.39.26).
-- `az bicep build-params --file infra/environments/dev.bicepparam` passes.
-- `docker build --platform linux/amd64` passed on the previous Dockerfile. The Dockerfile is unchanged in the fix round.
+- CI installs Bicep v0.46.1 and runs lint/build on `infra/main.bicep` and all environment parameter files.
+- CD builds the `linux/amd64` image and runs the pinned runtime and MCP smoke gates inside it before deployment.
 - Not run against Azure: `az deployment group validate` (needs login and an existing resource group), or live checks of port 8080 and `/healthz` and `/readyz`. These handlers and the role entrypoint are wired in the application and covered by offline tests; deployed behavior still requires live acceptance.
 
 ## Known limitations and tradeoffs

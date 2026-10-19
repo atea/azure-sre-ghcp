@@ -190,7 +190,6 @@ replicas before deploying them.
 
 ## Known gaps
 
-- **`aiohttp` is not a declared dependency.** The async Azure SDK clients (Table, Blob,
-  Service Bus, Managed Identity) need it at runtime. Add `aiohttp` (or `azure-core[aio]`) to
-  `pyproject.toml`. Unit tests inject a no-network transport instead.
-- The live Azure path has not been run yet. This is tracked by the `durable-worker` live gate.
+- The worker's real Azure dependencies and deployment have not been exercised. See
+  [integration gates](integration-gates.md): L3 covers managed-identity CLI access and L6
+  covers the deployed image and app readiness.

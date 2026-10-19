@@ -141,8 +141,8 @@ These need confirmation in the live-gated test. Until then, the live item stays 
   AppRoleName); container logs (RevisionName_s, ContainerName_s, Stream_s, Log_s).
 - MI token refresh for workers relies on the passed `IDENTITY_ENDPOINT`/`IDENTITY_HEADER`
   (or `MSI_*`) variables and the copied `azureProfile.json`. No token cache is copied. This
-  is unverified. If refresh fails in the live test, the fallback is a per-worker login under
-  the same identity environment.
+  is unverified; there is no per-worker login fallback, so a refresh failure may cause
+  diagnostic commands to fail.
 
 ## Tests
 

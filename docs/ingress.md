@@ -88,7 +88,9 @@ Azure Monitor's exact token shape (`appid` vs `azp`, `ver`, `roles`) is unverifi
 | `expected_role` | Deployment config (the app role assigned to the caller). |
 | `jwks_refresh_seconds`, `jwks_min_refresh_seconds`, `jwks_max_age_seconds`, `clock_leeway_seconds` | Optional tuning. |
 
-`AppConfig` does not yet carry tenant, audience, caller app id, or role. The entrypoint must build `IngressSettings` from its own deployment settings. This is a gap for the config owner.
+`AppConfig` carries the registry tenant and webhook callers; the receiver entrypoint builds
+`IngressSettings` from that tenant and the deployment-provided audience, caller app id, and
+role. Bicep supplies these settings to the receiver.
 
 ## Construction
 
@@ -133,7 +135,8 @@ Run: `uv run pytest tests/unit/test_ingress.py tests/unit/test_ingress_faults.py
 ## Blockers and open items
 
 - Live gates are not run. The Monitor token shape, the ServiceBus duplicate-detection setting, and whether 1.5s covers a cold AMQP open plus auth are unverified. The startup open mitigates the cold case.
-- `AppConfig` lacks tenant, audience, caller app id, and role. The entrypoint must supply `IngressSettings`.
+- `AppConfig` intentionally does not carry the deployment-specific audience, caller app id, or role;
+  the receiver entrypoint supplies them to `IngressSettings`.
 - Registry workspace-GUID uniqueness is stricter in the contracts owner's scope.
 - The worker persists `Sink.TEST` investigations with no publisher calls. This is
   an internal test sink, not a test-repository issue-publication path.

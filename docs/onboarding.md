@@ -79,7 +79,8 @@ Do not paste result rows into tickets. Record only the counts and the query iden
 ### 5. Confirm the publisher installation
 
 - The publisher App installation lists the target repository and nothing else.
-- Confirm labels exist in the target repository (label setup is part of the runbook; create them manually or through an approved script — none exists yet).
+- Labels are not required or applied by the publisher. Create them separately only if operators
+  want them for manual triage.
 - The test repository is used for the first pilot run. Production repositories follow only after acceptance.
 
 ### 6. Register the scope (expected)

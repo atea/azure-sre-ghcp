@@ -90,7 +90,7 @@ uv run python -m azure_sre.runtime.smoke offline
 export GITHUB_MCP_SERVER_PATH=$PWD/.work/gms/github-mcp-server
 uv run python -m azure_sre.runtime.smoke mcp-tools \
   --binary "$GITHUB_MCP_SERVER_PATH"
-uv run pytest -q
+uv run pytest -q -m "not live"
 ```
 
 The full test command excludes opt-in live tests by default. Live gates require

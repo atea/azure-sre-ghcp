@@ -203,8 +203,8 @@ gives `UNCERTAIN`.
 
 ## Live gate (pending)
 
-Offline coverage: 82 tests in `tests/unit/test_publisher*.py`. Live gate L4 has **not**
-run. It needs:
+Offline publisher coverage is in `tests/unit/test_publisher*.py`. Live gate L4 has
+**not** run. It needs:
 
 - the GitHub App ID and bot login (`SRE_PUBLISHER_BOT_LOGIN`);
 - an installation on a disposable test repository, registered in the registry;

@@ -71,7 +71,7 @@ No credentials are used.
 |---|---|
 | `uv run python -m azure_sre.runtime.smoke offline` | ✅ every check passed: `pins_match_installed`, `runtime_ping`, `allowlisted_custom_tool_runs`, `unpermitted_custom_tool_denied`, `builtin_tools_hidden` (bash/view/edit/... do not exist), `permission_audit_recorded`, `disposal_clean` |
 | `uv run python -m azure_sre.runtime.smoke mcp-tools --binary .work/gms/github-mcp-server` | ✅ `server_identity`, `only_publisher_tools_advertised`, `all_publisher_tools_present` |
-| `GITHUB_MCP_SERVER_PATH=$PWD/.work/gms/github-mcp-server uv run pytest -q` | ✅ 13 passed, 1 skipped (the live gate is opt-in) |
+| `GITHUB_MCP_SERVER_PATH=$PWD/.work/gms/github-mcp-server uv run pytest -q -m "not live"` | ✅ offline unit, integration and acceptance suite; live gates are excluded |
 | `uv run ruff check . && uv run ruff format --check .` | ✅ clean |
 | `uv run mypy` (strict) | ✅ no issues in 13 files |
 | `uv lock --check` | ✅ lockfile consistent |
